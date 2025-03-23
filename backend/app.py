@@ -5,22 +5,32 @@ from pymongo import MongoClient
 import os
 from datetime import timedelta
 import bcrypt
+from dotenv import load_dotenv
+
+load_dotenv()
+
+MONGO_URI = os.getenv('MONGO_URI')
+JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
 
 # Import recommenders
 from recommenders.content_based import ContentBasedRecommender
 from recommenders.collaborative import CollaborativeRecommender
+
+# Import services
+from services.auth_service import register_user, login_user
+from utils.validation import validate_registration_input, validate_login_input
 
 # Initialize Flask app
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 # Configure JWT
-app.config['JWT_SECRET_KEY'] = os.environ.get('JWT_SECRET_KEY', 'dev-secret-key')
+app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY or 'dev-secret-key'
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
 jwt = JWTManager(app)
 
 # Connect to MongoDB
-mongo_uri = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/media_recommender')
+mongo_uri = MONGO_URI or 'mongodb://localhost:27017/media_recommender'
 client = MongoClient(mongo_uri)
 db = client.get_database()
 
@@ -32,43 +42,32 @@ collaborative_recommender = CollaborativeRecommender(db)
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.get_json()
-    
-    # Check if user already exists
-    if db.users.find_one({'email': data['email']}):
-        return jsonify({'message': 'User already exists'}), 409
-    
-    # Hash password
-    hashed_password = bcrypt.hashpw(data['password'].encode('utf-8'), bcrypt.gensalt())
-    
-    # Create user
-    user = {
-        'email': data['email'],
-        'password': hashed_password,
-        'name': data.get('name', ''),
-        'preferences': data.get('preferences', {}),
-        'watchlist': [],
-        'ratings': {}
-    }
-    
-    db.users.insert_one(user)
-    
-    return jsonify({'message': 'User registered successfully'}), 201
+
+    # Validate input
+    validation_error = validate_registration_input(data)
+    if (validation_error):
+        return validation_error
+
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'message': 'Username and password are required'}), 400
+    return register_user(db, username, password)
 
 @app.route('/api/login', methods=['POST'])
 def login():
     data = request.get_json()
-    
-    # Find user
-    user = db.users.find_one({'email': data['email']})
-    if not user:
-        return jsonify({'message': 'Invalid credentials'}), 401
-    
-    # Check password
-    if bcrypt.checkpw(data['password'].encode('utf-8'), user['password']):
-        access_token = create_access_token(identity=str(user['_id']))
-        return jsonify({'token': access_token}), 200
-    
-    return jsonify({'message': 'Invalid credentials'}), 401
+
+    # Validate input
+    validation_error = validate_login_input(data)
+    if (validation_error):
+        return validation_error
+
+    username = data.get('username')
+    password = data.get('password')
+    if not username or not password:
+        return jsonify({'message': 'Username and password are required'}), 400
+    return login_user(db, username, password)
 
 # User preference routes
 @app.route('/api/preferences', methods=['GET', 'PUT'])

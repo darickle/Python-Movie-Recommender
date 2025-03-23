@@ -1,3 +1,12 @@
+"""
+Darick Le
+Date: March-22-2025
+Last Updated: March-22-2025
+Collaborative Filtering Recommender to recommend movies to users based on their ratings and similar users.
+It uses the cosine similarity between users to find similar users and recommend movies that similar users liked.
+This is a user-based collaborative filtering model.
+"""
+
 import pandas as pd
 import numpy as np
 from sklearn.metrics.pairwise import cosine_similarity
