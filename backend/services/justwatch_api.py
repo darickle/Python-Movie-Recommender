@@ -2,18 +2,21 @@ import requests
 import json
 import time
 from datetime import datetime
+from config import JUSTWATCH_API_KEY  # Import the API key
 
 class JustWatchAPI:
     def __init__(self, country='US'):
         self.base_url = 'https://apis.justwatch.com/content'
         self.country = country
+        self.api_key = JUSTWATCH_API_KEY  # Store the API key
         self.platform_map = self._get_platform_map()
     
     def _get_platform_map(self):
         """Get mapping of provider IDs to names"""
         try:
             url = f"{self.base_url}/providers/locale/{self.country.lower()}"
-            response = requests.get(url)
+            headers = {"Authorization": f"Bearer {self.api_key}"}  # Include API key in headers
+            response = requests.get(url, headers=headers)
             providers = response.json()
             
             return {provider['id']: provider['clear_name'] for provider in providers}
@@ -39,6 +42,7 @@ class JustWatchAPI:
         """Search for movies by title"""
         try:
             url = f"{self.base_url}/titles/{self.country.lower()}/popular"
+            headers = {"Authorization": f"Bearer {self.api_key}"}  # Include API key in headers
             payload = {
                 "body": json.dumps({
                     "page": page,
@@ -48,7 +52,7 @@ class JustWatchAPI:
                 })
             }
             
-            response = requests.get(url, params=payload)
+            response = requests.get(url, headers=headers, params=payload)
             data = response.json()
             
             return self._process_results(data.get('items', []))
@@ -60,6 +64,7 @@ class JustWatchAPI:
         """Search for TV shows by title"""
         try:
             url = f"{self.base_url}/titles/{self.country.lower()}/popular"
+            headers = {"Authorization": f"Bearer {self.api_key}"}  # Include API key in headers
             payload = {
                 "body": json.dumps({
                     "page": page,
@@ -69,7 +74,7 @@ class JustWatchAPI:
                 })
             }
             
-            response = requests.get(url, params=payload)
+            response = requests.get(url, headers=headers, params=payload)
             data = response.json()
             
             return self._process_results(data.get('items', []))
@@ -81,7 +86,8 @@ class JustWatchAPI:
         """Get detailed information about a title"""
         try:
             url = f"{self.base_url}/titles/movie/{title_id}/locale/{self.country.lower()}"
-            response = requests.get(url)
+            headers = {"Authorization": f"Bearer {self.api_key}"}  # Include API key in headers
+            response = requests.get(url, headers=headers)
             data = response.json()
             
             return self._process_title_details(data)
@@ -93,6 +99,7 @@ class JustWatchAPI:
         """Get popular movies or shows"""
         try:
             url = f"{self.base_url}/titles/{self.country.lower()}/popular"
+            headers = {"Authorization": f"Bearer {self.api_key}"}  # Include API key in headers
             payload = {
                 "body": json.dumps({
                     "page": page,
@@ -101,7 +108,7 @@ class JustWatchAPI:
                 })
             }
             
-            response = requests.get(url, params=payload)
+            response = requests.get(url, headers=headers, params=payload)
             data = response.json()
             
             return self._process_results(data.get('items', []))

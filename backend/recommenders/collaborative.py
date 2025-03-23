@@ -3,8 +3,7 @@ Darick Le
 Date: March-22-2025
 Last Updated: March-22-2025
 Collaborative Filtering Recommender to recommend movies to users based on their ratings and similar users.
-It uses the cosine similarity between users to find similar users and recommend movies that similar users liked.
-This is a user-based collaborative filtering model.
+It uses the cosine similarity between people to construct a user-based filtering model.
 """
 
 import pandas as pd
@@ -16,6 +15,7 @@ import os
 from datetime import datetime
 
 class CollaborativeRecommender:
+    # Recommends movies to users based on their ratings and similar users
     def __init__(self, db):
         self.db = db
         self.user_item_matrix = None
@@ -24,15 +24,15 @@ class CollaborativeRecommender:
         self.user_indices = {}
         self.model_path = 'models/collaborative_model.pkl'
         self.last_update = None
-        
-        # Load or build the model
+
+        # Load or build model
         if os.path.exists(self.model_path):
             self.load_model()
         else:
             self.build_model()
     
+    # Build the collaborative filtering model
     def build_model(self):
-        """Build the collaborative filtering model"""
         print("Building collaborative filtering model...")
         
         # Get all users with ratings
@@ -46,6 +46,7 @@ class CollaborativeRecommender:
         for user in users:
             all_movie_ids.update(user.get('ratings', {}).keys())
         
+        # Create movie index mapping
         self.movie_ids = list(all_movie_ids)
         if not self.movie_ids:
             print("No movie ratings found")
@@ -59,7 +60,6 @@ class CollaborativeRecommender:
             for movie_id in self.movie_ids:
                 if movie_id in ratings:
                     data.append([idx, self.movie_ids.index(movie_id), ratings[movie_id]])
-        
         if not data:
             print("No rating data found")
             return
