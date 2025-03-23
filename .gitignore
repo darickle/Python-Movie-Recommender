@@ -48,3 +48,5 @@ coverage/
 *.bak
 *.tmp
 *.temp
+
+.DS_Store

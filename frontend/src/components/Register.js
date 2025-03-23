@@ -1,27 +1,28 @@
 import React, { useState } from 'react';
-import { loginUser } from '../services/authService';
-import '../styles/Login.css';
+import { registerUser } from '../services/authService';
 
-const Login = () => {
+const Register = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [success, setSuccess] = useState('');
 
-  const handleLogin = async (e) => {
+  const handleRegister = async (e) => {
     e.preventDefault();
     try {
-      await loginUser(username, password);
-      alert('Login successful!');
-      window.location.href = '/'; // Redirect to the homepage
+      await registerUser(username, password);
+      setSuccess('Registration successful! You can now log in.');
+      setError('');
     } catch (err) {
       setError(err.message || 'An error occurred');
+      setSuccess('');
     }
   };
 
   return (
-    <div className="login-container">
-      <h1>Login</h1>
-      <form onSubmit={handleLogin} className="login-form">
+    <div>
+      <h1>Register</h1>
+      <form onSubmit={handleRegister}>
         <div>
           <label>Username:</label>
           <input
@@ -29,7 +30,6 @@ const Login = () => {
             value={username}
             onChange={(e) => setUsername(e.target.value)}
             required
-            className="login-input"
           />
         </div>
         <div>
@@ -39,16 +39,14 @@ const Login = () => {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             required
-            className="login-input"
           />
         </div>
-        {error && <p className="login-error">{error}</p>}
-        <button type="submit" className="login-button">
-          Login
-        </button>
+        {error && <p style={{ color: 'red' }}>{error}</p>}
+        {success && <p style={{ color: 'green' }}>{success}</p>}
+        <button type="submit">Register</button>
       </form>
     </div>
   );
 };
 
-export default Login;
+export default Register;
