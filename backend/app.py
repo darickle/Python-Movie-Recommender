@@ -1,221 +1,414 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
-from pymongo import MongoClient
+import requests
 import os
-from datetime import timedelta
-import bcrypt
-from dotenv import load_dotenv
+from flask_cors import CORS
+from bson.objectid import ObjectId
+import pandas as pd
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+import config  # Import config.py
+from pymongo.mongo_client import MongoClient
+from pymongo.server_api import ServerApi
 
-load_dotenv()
-
-MONGO_URI = os.getenv('MONGO_URI')
-JWT_SECRET_KEY = os.getenv('JWT_SECRET_KEY')
-
-# Import recommenders
-from recommenders.content_based import ContentBasedRecommender
-from recommenders.collaborative import CollaborativeRecommender
-
-# Import services
-from services.auth_service import register_user, login_user
-from utils.validation import validate_registration_input, validate_login_input
-
-# Initialize Flask app
 app = Flask(__name__)
-CORS(app)  # Enable CORS for all routes
+CORS(app)
 
-# Configure JWT
-app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY or 'dev-secret-key'
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=1)
+# Configuration
+app.config["MONGO_URI"] = config.MONGO_URI
+app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
+
+# Create a new client and connect to the server
+client = MongoClient(config.MONGO_URI, server_api=ServerApi('1'), tls=True, tlsAllowInvalidCertificates=True)
+
+# Send a ping to confirm a successful connection
+try:
+    client.admin.command('ping')
+    print("Pinged your deployment. You successfully connected to MongoDB!")
+except Exception as e:
+    print(e)
+
+# Replace PyMongo initialization with the new client
+mongo = client.get_database()  # Ensure config.MONGO_URI includes a default database, e.g., "mongodb+srv://<user>:<password>@cluster.mongodb.net/mydatabase"
+
 jwt = JWTManager(app)
 
-# Connect to MongoDB
-mongo_uri = MONGO_URI or 'mongodb://localhost:27017/media_recommender'
-client = MongoClient(mongo_uri)
-db = client.get_database()
+# WatchMode API configuration
+WATCHMODE_API_KEY = config.WATCHMODE_API_KEY
+WATCHMODE_BASE_URL = "https://api.watchmode.com/v1"
 
-# Initialize recommenders
-content_recommender = ContentBasedRecommender(db)
-collaborative_recommender = CollaborativeRecommender(db)
+# Get list of available streaming services
+@app.route("/api/streaming_services", methods=["GET"])
+def get_streaming_services():
+    # First check if we have this cached in our database
+    cached_services = mongo.db.streaming_services.find_one({"type": "all_services"})
+    
+    if cached_services:
+        return jsonify(cached_services["services"])
+    
+    # If not cached, fetch from WatchMode API
+    url = f"{WATCHMODE_BASE_URL}/sources/?apiKey={WATCHMODE_API_KEY}"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        services = response.json()
+        # Filter to only include subscription streaming services (not rentals)
+        subscription_services = [service for service in services if service.get("type") == "sub"]
+        
+        # Cache in database
+        mongo.db.streaming_services.insert_one({
+            "type": "all_services",
+            "services": subscription_services
+        })
+        
+        return jsonify(subscription_services)
+    else:
+        return jsonify({"error": "Failed to fetch streaming services"}), 500
 
-# User authentication routes
-@app.route('/api/register', methods=['POST'])
+# User registration
+@app.route("/api/register", methods=["POST"])
 def register():
     data = request.get_json()
+    
+    # Check if user already exists
+    if mongo.db.users.find_one({"email": data["email"]}):
+        return jsonify({"error": "User already exists"}), 400
+    
+    # Create new user
+    user = {
+        "email": data["email"],
+        "password": data["password"],  # In production, hash this password
+        "streaming_services": data.get("streaming_services", []),
+        "preferences": data.get("preferences", {})
+    }
+    
+    user_id = mongo.db.users.insert_one(user).inserted_id
+    
+    # Create access token
+    access_token = create_access_token(identity=str(user_id))
+    
+    return jsonify({"message": "User registered successfully", "token": access_token}), 201
 
-    # Validate input
-    validation_error = validate_registration_input(data)
-    if (validation_error):
-        return validation_error
-
-    username = data.get('username')
-    password = data.get('password')
-    if not username or not password:
-        return jsonify({'message': 'Username and password are required'}), 400
-    return register_user(db, username, password)
-
-@app.route('/api/login', methods=['POST'])
+# User login
+@app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
+    
+    user = mongo.db.users.find_one({"email": data["email"], "password": data["password"]})
+    
+    if not user:
+        return jsonify({"error": "Invalid credentials"}), 401
+    
+    access_token = create_access_token(identity=str(user["_id"]))
+    
+    return jsonify({"token": access_token, "user": {
+        "email": user["email"],
+        "streaming_services": user.get("streaming_services", [])
+    }}), 200
 
-    # Validate input
-    validation_error = validate_login_input(data)
-    if (validation_error):
-        return validation_error
-
-    username = data.get('username')
-    password = data.get('password')
-    if not username or not password:
-        return jsonify({'message': 'Username and password are required'}), 400
-    return login_user(db, username, password)
-
-# User preference routes
-@app.route('/api/preferences', methods=['GET', 'PUT'])
+# Update user streaming services
+@app.route("/api/user/streaming_services", methods=["PUT"])
 @jwt_required()
-def user_preferences():
+def update_streaming_services():
     user_id = get_jwt_identity()
+    data = request.get_json()
     
-    if request.method == 'GET':
-        user = db.users.find_one({'_id': user_id})
-        return jsonify(user.get('preferences', {})), 200
+    mongo.db.users.update_one(
+        {"_id": ObjectId(user_id)},
+        {"$set": {"streaming_services": data["streaming_services"]}}
+    )
     
-    if request.method == 'PUT':
-        data = request.get_json()
-        db.users.update_one(
-            {'_id': user_id},
-            {'$set': {'preferences': data}}
-        )
-        return jsonify({'message': 'Preferences updated successfully'}), 200
+    return jsonify({"message": "Streaming services updated successfully"}), 200
 
-# Recommendation routes
-@app.route('/api/recommendations', methods=['GET'])
+# Search for content
+@app.route("/api/search", methods=["GET"])
+def search_content():
+    query = request.args.get("query", "")
+    
+    if not query:
+        return jsonify({"error": "Query parameter is required"}), 400
+    
+    url = f"{WATCHMODE_BASE_URL}/search/?apiKey={WATCHMODE_API_KEY}&search_field=name&search_value={query}"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        results = response.json().get("title_results", [])
+        
+        # Cache results in database
+        for item in results:
+            mongo.db.content.update_one(
+                {"id": item["id"]},
+                {"$set": item},
+                upsert=True
+            )
+        
+        return jsonify(results)
+    else:
+        return jsonify({"error": "Failed to search content"}), 500
+
+# Get content details with streaming availability
+@app.route("/api/content/<content_id>", methods=["GET"])
+def get_content_details(content_id):
+    # Check if we have this cached with recent sources data
+    cached_content = mongo.db.content_details.find_one({"id": content_id})
+    
+    # If cached and recent (within 1 day), return cached data
+    if cached_content:
+        return jsonify(cached_content)
+    
+    # Fetch details from WatchMode API
+    url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        content_details = response.json()
+        
+        # Cache in database
+        mongo.db.content_details.update_one(
+            {"id": content_id},
+            {"$set": content_details},
+            upsert=True
+        )
+        
+        return jsonify(content_details)
+    else:
+        return jsonify({"error": "Failed to fetch content details"}), 500
+
+# Get personalized recommendations
+@app.route("/api/recommendations", methods=["GET"])
 @jwt_required()
 def get_recommendations():
     user_id = get_jwt_identity()
-    recommendation_type = request.args.get('type', 'hybrid')
-    limit = int(request.args.get('limit', 10))
+    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
     
-    if recommendation_type == 'content':
-        recommendations = content_recommender.get_recommendations(user_id, limit)
-    elif recommendation_type == 'collaborative':
-        recommendations = collaborative_recommender.get_recommendations(user_id, limit)
-    else:  # hybrid
-        content_recs = content_recommender.get_recommendations(user_id, limit // 2)
-        collab_recs = collaborative_recommender.get_recommendations(user_id, limit // 2)
-        # Combine recommendations and remove duplicates
-        recommendations = list({rec['id']: rec for rec in content_recs + collab_recs}.values())
+    if not user or not user.get("streaming_services"):
+        return jsonify({"error": "User streaming services not set"}), 400
     
-    return jsonify(recommendations), 200
+    # Get user's streaming services
+    user_services = user.get("streaming_services", [])
+    
+    # Fetch content for these services
+    # First, get a sample of popular titles from WatchMode API to start with
+    recommended_content = []
+    
+    # Get user's watch history and ratings if available
+    user_ratings = list(mongo.db.ratings.find({"user_id": user_id}))
+    
+    # If user has ratings, use them for content-based recommendations
+    if user_ratings:
+        # Get content details for items user has rated highly
+        liked_content = []
+        for rating in user_ratings:
+            if rating["rating"] >= 4:  # 4 or 5 star ratings
+                content = mongo.db.content_details.find_one({"id": rating["content_id"]})
+                if content:
+                    liked_content.append(content)
+        
+        # Generate recommendations based on content similarity
+        # This is a simplified version - in a real app, you'd want more sophisticated logic
+        if liked_content:
+            # Create a simplified content representation for similarity calculation
+            content_data = []
+            for item in liked_content:
+                # Create a string of features for TF-IDF
+                features = f"{item.get('title', '')} {item.get('genre_names', '')} {item.get('network_names', '')}"
+                content_data.append({
+                    "id": item["id"],
+                    "features": features
+                })
+            
+            # Convert to DataFrame for processing
+            df = pd.DataFrame(content_data)
+            
+            # Create TF-IDF vectors
+            tfidf = TfidfVectorizer(stop_words='english')
+            tfidf_matrix = tfidf.fit_transform(df['features'])
+            
+            # Calculate cosine similarity
+            cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+            
+            # Get indices of items user has liked
+            indices = df.index.tolist()
+            
+            # Get similar items
+            similar_items = []
+            for idx in indices:
+                similar_indices = cosine_sim[idx].argsort()[:-6:-1]  # Top 5 similar items
+                similar_items.extend([df.iloc[i]["id"] for i in similar_indices if i != idx])
+            
+            # Remove duplicates
+            similar_items = list(set(similar_items))
+            
+            # Fetch details for these items
+            for item_id in similar_items:
+                content = mongo.db.content_details.find_one({"id": item_id})
+                if content:
+                    # Check if available on user's streaming services
+                    sources = content.get("sources", [])
+                    available_on_user_services = any(source["source_id"] in user_services for source in sources)
+                    
+                    if available_on_user_services:
+                        recommended_content.append(content)
+    
+    # If we don't have enough recommendations yet, get popular content from user's services
+    if len(recommended_content) < 10:
+        # Get popular movies and shows available on user's streaming services
+        # This would typically be fetched from the API, but we'll use a simplified approach
+        # In a real app, you'd want to paginate and fetch more data
+        
+        url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=20"
+        response = requests.get(url)
+        
+        if response.status_code == 200:
+            popular_content = response.json().get("titles", [])
+            
+            # For each item, check streaming availability
+            for item in popular_content:
+                content_id = item["id"]
+                details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
+                details_response = requests.get(details_url)
+                
+                if details_response.status_code == 200:
+                    content_details = details_response.json()
+                    
+                    # Check if available on user's streaming services
+                    sources = content_details.get("sources", [])
+                    available_on_user_services = any(source["source_id"] in user_services for source in sources)
+                    
+                    if available_on_user_services and content_details not in recommended_content:
+                        recommended_content.append(content_details)
+                        
+                        # Cache in database
+                        mongo.db.content_details.update_one(
+                            {"id": content_id},
+                            {"$set": content_details},
+                            upsert=True
+                        )
+                
+                # Stop once we have enough recommendations
+                if len(recommended_content) >= 20:
+                    break
+    
+    return jsonify(recommended_content)
 
-# Movie routes
-@app.route('/api/movies', methods=['GET'])
-def get_movies():
-    query = {}
-    title = request.args.get('title')
-    genre = request.args.get('genre')
-    platform = request.args.get('platform')
-    
-    if title:
-        query['title'] = {'$regex': title, '$options': 'i'}
-    if genre:
-        query['genres'] = genre
-    if platform:
-        query['streaming_platforms'] = platform
-    
-    limit = int(request.args.get('limit', 20))
-    skip = int(request.args.get('skip', 0))
-    
-    movies = list(db.movies.find(query).skip(skip).limit(limit))
-    
-    # Convert ObjectId to string for JSON serialization
-    for movie in movies:
-        movie['_id'] = str(movie['_id'])
-    
-    return jsonify(movies), 200
-
-@app.route('/api/movies/<movie_id>', methods=['GET'])
-def get_movie(movie_id):
-    movie = db.movies.find_one({'_id': movie_id})
-    if not movie:
-        return jsonify({'message': 'Movie not found'}), 404
-    
-    movie['_id'] = str(movie['_id'])
-    return jsonify(movie), 200
-
-# User movie interaction routes
-@app.route('/api/watchlist', methods=['GET', 'POST', 'DELETE'])
+# Add content to watchlist
+@app.route("/api/watchlist", methods=["POST"])
 @jwt_required()
-def watchlist():
-    user_id = get_jwt_identity()
-    
-    if request.method == 'GET':
-        user = db.users.find_one({'_id': user_id})
-        watchlist_ids = user.get('watchlist', [])
-        watchlist_movies = list(db.movies.find({'_id': {'$in': watchlist_ids}}))
-        
-        # Convert ObjectId to string for JSON serialization
-        for movie in watchlist_movies:
-            movie['_id'] = str(movie['_id'])
-        
-        return jsonify(watchlist_movies), 200
-    
-    if request.method == 'POST':
-        data = request.get_json()
-        movie_id = data['movie_id']
-        
-        db.users.update_one(
-            {'_id': user_id},
-            {'$addToSet': {'watchlist': movie_id}}
-        )
-        return jsonify({'message': 'Movie added to watchlist'}), 200
-    
-    if request.method == 'DELETE':
-        data = request.get_json()
-        movie_id = data['movie_id']
-        
-        db.users.update_one(
-            {'_id': user_id},
-            {'$pull': {'watchlist': movie_id}}
-        )
-        return jsonify({'message': 'Movie removed from watchlist'}), 200
-
-@app.route('/api/rate', methods=['POST'])
-@jwt_required()
-def rate_movie():
+def add_to_watchlist():
     user_id = get_jwt_identity()
     data = request.get_json()
-    movie_id = data['movie_id']
-    rating = data['rating']  # Rating from 1-5
     
-    # Update user ratings
-    db.users.update_one(
-        {'_id': user_id},
-        {'$set': {f'ratings.{movie_id}': rating}}
-    )
+    watchlist_item = {
+        "user_id": user_id,
+        "content_id": data["content_id"],
+        "added_date": pd.Timestamp.now()
+    }
     
-    # Update movie average rating
-    movie = db.movies.find_one({'_id': movie_id})
-    current_rating = movie.get('average_rating', 0)
-    current_votes = movie.get('rating_count', 0)
+    mongo.db.watchlist.insert_one(watchlist_item)
     
-    new_rating_count = current_votes + 1
-    new_average = ((current_rating * current_votes) + rating) / new_rating_count
-    
-    db.movies.update_one(
-        {'_id': movie_id},
-        {
-            '$set': {
-                'average_rating': new_average,
-                'rating_count': new_rating_count
-            }
-        }
-    )
-    
-    # Trigger updating recommender models
-    content_recommender.update_user_profile(user_id)
-    collaborative_recommender.update_model()
-    
-    return jsonify({'message': 'Rating saved successfully'}), 200
+    return jsonify({"message": "Added to watchlist successfully"}), 201
 
-if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+# Get user's watchlist
+@app.route("/api/watchlist", methods=["GET"])
+@jwt_required()
+def get_watchlist():
+    user_id = get_jwt_identity()
+    
+    watchlist = list(mongo.db.watchlist.find({"user_id": user_id}))
+    
+    # Get details for each item
+    watchlist_with_details = []
+    for item in watchlist:
+        content = mongo.db.content_details.find_one({"id": item["content_id"]})
+        if content:
+            watchlist_with_details.append({
+                "watchlist_id": str(item["_id"]),
+                "added_date": item["added_date"],
+                "content": content
+            })
+    
+    return jsonify(watchlist_with_details)
+
+# Add rating for content
+@app.route("/api/ratings", methods=["POST"])
+@jwt_required()
+def add_rating():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    rating_item = {
+        "user_id": user_id,
+        "content_id": data["content_id"],
+        "rating": data["rating"],  # 1-5 scale
+        "review": data.get("review", ""),
+        "date": pd.Timestamp.now()
+    }
+    
+    # Update if exists, otherwise insert
+    mongo.db.ratings.update_one(
+        {"user_id": user_id, "content_id": data["content_id"]},
+        {"$set": rating_item},
+        upsert=True
+    )
+    
+    return jsonify({"message": "Rating added successfully"}), 201
+
+# Get trending content available on user's services
+@app.route("/api/trending", methods=["GET"])
+@jwt_required()
+def get_trending():
+    user_id = get_jwt_identity()
+    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+    
+    if not user or not user.get("streaming_services"):
+        return jsonify({"error": "User streaming services not set"}), 400
+    
+    user_services = user.get("streaming_services", [])
+    
+    # Get trending movies and shows from WatchMode API
+    url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=20"
+    response = requests.get(url)
+    
+    if response.status_code == 200:
+        trending_items = []
+        trending_results = response.json().get("titles", [])
+        
+        # Check availability on user's services
+        for item in trending_results:
+            content_id = item["id"]
+            sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
+            sources_response = requests.get(sources_url)
+            
+            if sources_response.status_code == 200:
+                sources = sources_response.json()
+                
+                # Check if available on user's services
+                available_on_user_services = any(source["source_id"] in user_services for source in sources)
+                
+                if available_on_user_services:
+                    # Get full details
+                    details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
+                    details_response = requests.get(details_url)
+                    
+                    if details_response.status_code == 200:
+                        item_details = details_response.json()
+                        item_details["sources"] = sources
+                        trending_items.append(item_details)
+                        
+                        # Cache in database
+                        mongo.db.content_details.update_one(
+                            {"id": content_id},
+                            {"$set": item_details},
+                            upsert=True
+                        )
+            
+            # Stop once we have enough items
+            if len(trending_items) >= 10:
+                break
+        
+        return jsonify(trending_items)
+    else:
+        return jsonify({"error": "Failed to fetch trending content"}), 500
+
+if __name__ == "__main__":
+    app.run(debug=True)
