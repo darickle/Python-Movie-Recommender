@@ -11,6 +11,7 @@ MONGO_DB_NAME = os.environ.get('MONGO_DB_NAME', 'media_recommender')
 # API configuration
 JWT_SECRET_KEY = os.environ.get('JWT_SECRET_KEY', 'your-secret-key-here')
 JUSTWATCH_API_KEY = os.environ.get('JUSTWATCH_API_KEY', 'your-justwatch-api-key-here')
+print(f"JUSTWATCH_API_KEY: {JUSTWATCH_API_KEY}")
 
 # Recommendation system configuration
 CONTENT_RECOMMENDER_WEIGHT = float(os.environ.get('CONTENT_RECOMMENDER_WEIGHT', 0.5))
