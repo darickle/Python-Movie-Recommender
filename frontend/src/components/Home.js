@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
+import '../styles/home.css';
 
 function Home({ user }) {
   const [recommendations, setRecommendations] = useState([]);
@@ -47,7 +48,12 @@ function Home({ user }) {
   };
 
   if (loading) {
-    return <div>Loading recommendations...</div>;
+    return (
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p>Loading recommendations...</p>
+      </div>
+    );
   }
 
   // If user hasn't set up streaming services yet
@@ -64,54 +70,63 @@ function Home({ user }) {
   }
 
   return (
-    <div className="home">
-      <section className="recommendations">
-        <h2>Recommended For You</h2>
-        {recommendations.length === 0 ? (
-          <p>Rate some movies to get personalized recommendations!</p>
-        ) : (
+    <div className="container">
+      <div className="home">
+        <section className="recommendations">
+          <h2>Recommended For You</h2>
+          {recommendations.length === 0 ? (
+            <div className="empty-state">
+              <p>Rate some movies to get personalized recommendations!</p>
+              <Link to="/discover" className="btn btn-primary">Discover Movies</Link>
+            </div>
+          ) : (
+            <div className="content-grid">
+              {recommendations.map(item => (
+                <div key={item.id} className="content-card">
+                  <img 
+                    src={item.poster_url || 'https://via.placeholder.com/150x225?text=No+Image'} 
+                    alt={item.title}
+                  />
+                  <div className="content-card-body">
+                    <h3>{item.title}</h3>
+                    <p>{item.year}</p>
+                    <div className="card-actions">
+                      <Link to={`/movie/${item.id}`} className="btn btn-small">View Details</Link>
+                      <button onClick={() => addToWatchlist(item.id)} className="btn btn-small btn-outline">
+                        + Watchlist
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="trending">
+          <h2>Trending Now</h2>
           <div className="content-grid">
-            {recommendations.map(item => (
+            {trending.map(item => (
               <div key={item.id} className="content-card">
                 <img 
                   src={item.poster_url || 'https://via.placeholder.com/150x225?text=No+Image'} 
                   alt={item.title}
                 />
-                <h3>{item.title}</h3>
-                <p>{item.year}</p>
-                <div className="card-actions">
-                  <Link to={`/movie/${item.id}`} className="btn btn-small">View Details</Link>
-                  <button onClick={() => addToWatchlist(item.id)} className="btn btn-small btn-outline">
-                    + Watchlist
-                  </button>
+                <div className="content-card-body">
+                  <h3>{item.title}</h3>
+                  <p>{item.year}</p>
+                  <div className="card-actions">
+                    <Link to={`/movie/${item.id}`} className="btn btn-small">View Details</Link>
+                    <button onClick={() => addToWatchlist(item.id)} className="btn btn-small btn-outline">
+                      + Watchlist
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
           </div>
-        )}
-      </section>
-
-      <section className="trending">
-        <h2>Trending Now</h2>
-        <div className="content-grid">
-          {trending.map(item => (
-            <div key={item.id} className="content-card">
-              <img 
-                src={item.poster_url || 'https://via.placeholder.com/150x225?text=No+Image'} 
-                alt={item.title}
-              />
-              <h3>{item.title}</h3>
-              <p>{item.year}</p>
-              <div className="card-actions">
-                <Link to={`/movie/${item.id}`} className="btn btn-small">View Details</Link>
-                <button onClick={() => addToWatchlist(item.id)} className="btn btn-small btn-outline">
-                  + Watchlist
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   );
 }

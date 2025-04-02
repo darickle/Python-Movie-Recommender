@@ -10,6 +10,7 @@ from flask_jwt_extended import JWTManager, create_access_token, jwt_required, ge
 import config  # Import config.py
 from pymongo.mongo_client import MongoClient
 from pymongo.server_api import ServerApi
+import bcrypt  # Add bcrypt for password hashing
 
 app = Flask(__name__)
 CORS(app)
@@ -19,7 +20,12 @@ app.config["MONGO_URI"] = config.MONGO_URI
 app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
 
 # Create a new client and connect to the server
-client = MongoClient(config.MONGO_URI, server_api=ServerApi('1'), tls=True, tlsAllowInvalidCertificates=True)
+client = MongoClient(
+    config.MONGO_URI,
+    server_api=ServerApi('1'),
+    tls=True,
+    tlsAllowInvalidCertificates=True  # Disable SSL certificate validation
+)
 
 # Send a ping to confirm a successful connection
 try:
@@ -65,38 +71,59 @@ def get_streaming_services():
     else:
         return jsonify({"error": "Failed to fetch streaming services"}), 500
 
-# User registration
 @app.route("/api/register", methods=["POST"])
 def register():
-    data = request.get_json()
-    
-    # Check if user already exists
-    if mongo.db.users.find_one({"email": data["email"]}):
-        return jsonify({"error": "User already exists"}), 400
-    
-    # Create new user
-    user = {
-        "email": data["email"],
-        "password": data["password"],  # In production, hash this password
-        "streaming_services": data.get("streaming_services", []),
-        "preferences": data.get("preferences", {})
-    }
-    
-    user_id = mongo.db.users.insert_one(user).inserted_id
-    
-    # Create access token
-    access_token = create_access_token(identity=str(user_id))
-    
-    return jsonify({"message": "User registered successfully", "token": access_token}), 201
+    try:
+        data = request.get_json()
+        
+        # Log received data (for debugging)
+        print(f"Registration attempt: {data.get('email')}")
+        
+        # Validate input fields
+        email = data.get("email")
+        password = data.get("password")
+        if not email or not password:
+            return jsonify({"error": "Email and password are required"}), 400
+        
+        # Check if user already exists
+        if mongo.db.users.find_one({"email": email}):
+            return jsonify({"error": "User already exists"}), 400
+        
+        # Hash the password
+        hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")  # Decode to string
+        
+        # Create new user
+        user = {
+            "email": email,
+            "password": hashed_password,  # Store hashed password as string
+            "streaming_services": data.get("streaming_services", []),
+            "preferences": data.get("preferences", {}),
+            "created_at": pd.Timestamp.now(),  # Add creation timestamp
+        }
+        
+        # Insert the user
+        result = mongo.db.users.insert_one(user)
+        user_id = str(result.inserted_id)
+        
+        # Create access token
+        access_token = create_access_token(identity=user_id)
+        
+        print(f"User registered successfully: {email}")
+        return jsonify({"message": "User registered successfully", "token": access_token}), 201
+        
+    except Exception as e:
+        print(f"Registration error: {str(e)}")
+        return jsonify({"error": "Registration failed", "details": str(e)}), 500
 
-# User login
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
     
-    user = mongo.db.users.find_one({"email": data["email"], "password": data["password"]})
+    # Find user by email only
+    user = mongo.db.users.find_one({"email": data["email"]})
     
-    if not user:
+    # Check if user exists and password matches
+    if not user or not bcrypt.checkpw(data["password"].encode('utf-8'), user["password"].encode('utf-8')):  # Fixed missing parenthesis
         return jsonify({"error": "Invalid credentials"}), 401
     
     access_token = create_access_token(identity=str(user["_id"]))
