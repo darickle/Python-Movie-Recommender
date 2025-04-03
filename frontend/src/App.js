@@ -13,7 +13,7 @@ import Watchlist from './components/Watchlist';
 import Profile from './components/Profile';
 
 // API configuration
-const API_URL = 'http://localhost:5000/api';
+const API_URL = 'http://localhost:5001/api';
 axios.interceptors.request.use(
   config => {
     const token = localStorage.getItem('token');

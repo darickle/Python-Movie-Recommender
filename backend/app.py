@@ -6,19 +6,21 @@ from bson.objectid import ObjectId
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
-from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
+from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt
 import config  # Import config.py
 from pymongo import MongoClient, IndexModel
 from pymongo.server_api import ServerApi
 import bcrypt  # Add bcrypt for password hashing
 import certifi
+from functools import wraps
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000", "methods": ["GET", "POST", "OPTIONS"]}})
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000", "methods": ["GET", "POST", "OPTIONS", "PUT"]}})
 
 # Configuration
 app.config["MONGO_URI"] = config.MONGO_URI
 app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
+app.config["JWT_ERROR_MESSAGE_KEY"] = "error"
 
 # Use pymongo directly
 client = MongoClient(
@@ -36,11 +38,30 @@ def ensure_mongo_connection():
     try:
         client.admin.command('ping')
         print("Pinged your deployment. You successfully connected to MongoDB!")
+        return True
     except Exception as e:
         app.logger.error(f"Failed to connect to MongoDB: {e}")
-        return jsonify({"error": "Failed to connect to MongoDB"}), 500
+        return False
 
+# Initialize JWT after ensuring MongoDB connection
 jwt = JWTManager(app)
+
+# Helper function to validate request data
+def validate_request_data(required_fields):
+    def decorator(f):
+        @wraps(f)
+        def wrapper(*args, **kwargs):
+            data = request.get_json()
+            if not data:
+                return jsonify({"error": "Missing request data"}), 400
+            
+            missing_fields = [field for field in required_fields if field not in data]
+            if missing_fields:
+                return jsonify({"error": f"Missing required fields: {', '.join(missing_fields)}"}), 400
+                
+            return f(*args, **kwargs)
+        return wrapper
+    return decorator
 
 # WatchMode API configuration
 WATCHMODE_API_KEY = config.WATCHMODE_API_KEY
@@ -75,15 +96,13 @@ def get_streaming_services():
         return jsonify({"error": "Failed to fetch streaming services"}), 500
 
 @app.route("/api/register", methods=["POST"])
+@validate_request_data(["email", "password"])
 def register():
     print("Register endpoint reached")
     try:
         data = request.get_json()
         email = data.get("email")
         password = data.get("password")
-        
-        if not email or not password:
-            return jsonify({"error": "Email and password are required"}), 400
         
         # Check if user already exists
         if db.users.find_one({"email": email}):
@@ -115,6 +134,7 @@ def register():
         return jsonify({"error": "Registration failed", "details": str(e)}), 500
 
 @app.route("/api/login", methods=["POST"])
+@validate_request_data(["email", "password"])
 def login():
     data = request.get_json()
     email = data.get("email")
@@ -141,19 +161,41 @@ def login():
         }
     }), 200
 
+# Get user's streaming services
+@app.route("/api/user/streaming_services", methods=["GET"])
+@jwt_required()
+def get_user_streaming_services():
+    user_id = get_jwt_identity()
+    
+    try:
+        user = db.users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+            
+        return jsonify({"streaming_services": user.get("streaming_services", [])}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to get user streaming services: {str(e)}"}), 500
+
 # Update user streaming services
 @app.route("/api/user/streaming_services", methods=["PUT"])
 @jwt_required()
+@validate_request_data(["streaming_services"])
 def update_streaming_services():
     user_id = get_jwt_identity()
     data = request.get_json()
     
-    db.users.update_one(
-        {"_id": ObjectId(user_id)},
-        {"$set": {"streaming_services": data["streaming_services"]}}
-    )
-    
-    return jsonify({"message": "Streaming services updated successfully"}), 200
+    try:
+        result = db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"streaming_services": data["streaming_services"]}}
+        )
+        
+        if result.matched_count == 0:
+            return jsonify({"error": "User not found"}), 404
+            
+        return jsonify({"message": "Streaming services updated successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to update streaming services: {str(e)}"}), 500
 
 # Search for content
 @app.route("/api/search", methods=["GET"])
@@ -445,6 +487,24 @@ def get_trending():
     else:
         return jsonify({"error": "Failed to fetch trending content"}), 500
 
+# Error handler for expired JWT tokens
+@jwt.expired_token_loader
+def expired_token_callback(jwt_header, jwt_payload):
+    return jsonify({"error": "Token has expired", "code": "token_expired"}), 401
+
+# Error handler for invalid JWT tokens
+@jwt.invalid_token_loader
+def invalid_token_callback(error):
+    return jsonify({"error": "Invalid token", "code": "invalid_token"}), 401
+
+# Error handler for missing JWT tokens
+@jwt.unauthorized_loader
+def missing_token_callback(error):
+    return jsonify({"error": "Missing authentication token", "code": "missing_token"}), 401
+
 if __name__ == "__main__":
-    ensure_mongo_connection()
-    app.run(debug=True)
+    if ensure_mongo_connection():
+        # Change default port from 5000 to 5001 to avoid conflict with Apple services on macOS
+        app.run(debug=True, port=5001, host='0.0.0.0')
+    else:
+        print("Failed to connect to MongoDB. Exiting application.")
