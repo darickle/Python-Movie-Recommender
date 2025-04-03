@@ -14,7 +14,7 @@ import bcrypt  # Add bcrypt for password hashing
 import certifi
 
 app = Flask(__name__)
-CORS(app)
+CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000", "methods": ["GET", "POST", "OPTIONS"]}})
 
 # Configuration
 app.config["MONGO_URI"] = config.MONGO_URI
