@@ -8,9 +8,10 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity
 import config  # Import config.py
-from pymongo.mongo_client import MongoClient
+from pymongo import MongoClient, IndexModel
 from pymongo.server_api import ServerApi
 import bcrypt  # Add bcrypt for password hashing
+import certifi
 
 app = Flask(__name__)
 CORS(app)
@@ -19,23 +20,26 @@ CORS(app)
 app.config["MONGO_URI"] = config.MONGO_URI
 app.config["JWT_SECRET_KEY"] = config.JWT_SECRET_KEY
 
-# Create a new client and connect to the server
+# Use pymongo directly
 client = MongoClient(
     config.MONGO_URI,
     server_api=ServerApi('1'),
     tls=True,
-    tlsAllowInvalidCertificates=True  # Disable SSL certificate validation
+    tlsCAFile=certifi.where()
 )
-
-# Send a ping to confirm a successful connection
-try:
-    client.admin.command('ping')
-    print("Pinged your deployment. You successfully connected to MongoDB!")
-except Exception as e:
-    print(e)
 
 # Replace PyMongo initialization with the new client
 mongo = client.get_database()  # Ensure config.MONGO_URI includes a default database, e.g., "mongodb+srv://<user>:<password>@cluster.mongodb.net/mydatabase"
+db = client.get_database()  # Ensure db is the correct database object
+
+# Send a ping to confirm a successful connection
+def ensure_mongo_connection():
+    try:
+        client.admin.command('ping')
+        print("Pinged your deployment. You successfully connected to MongoDB!")
+    except Exception as e:
+        app.logger.error(f"Failed to connect to MongoDB: {e}")
+        return jsonify({"error": "Failed to connect to MongoDB"}), 500
 
 jwt = JWTManager(app)
 
@@ -73,15 +77,12 @@ def get_streaming_services():
 
 @app.route("/api/register", methods=["POST"])
 def register():
+    print("Register endpoint reached")
     try:
         data = request.get_json()
-        
-        # Log received data (for debugging)
-        print(f"Registration attempt: {data.get('email')}")
-        
-        # Validate input fields
         email = data.get("email")
         password = data.get("password")
+        
         if not email or not password:
             return jsonify({"error": "Email and password are required"}), 400
         
@@ -89,26 +90,25 @@ def register():
         if mongo.db.users.find_one({"email": email}):
             return jsonify({"error": "User already exists"}), 400
         
-        # Hash the password
-        hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")  # Decode to string
+        # Hash the password (store as a string)
+        hashed_password = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         
-        # Create new user
+        # Create user object
         user = {
             "email": email,
-            "password": hashed_password,  # Store hashed password as string
+            "password": hashed_password,
             "streaming_services": data.get("streaming_services", []),
             "preferences": data.get("preferences", {}),
-            "created_at": pd.Timestamp.now(),  # Add creation timestamp
+            "created_at": pd.Timestamp.now(),
         }
         
-        # Insert the user
+        # Insert user into the database
         result = mongo.db.users.insert_one(user)
         user_id = str(result.inserted_id)
         
         # Create access token
         access_token = create_access_token(identity=user_id)
         
-        print(f"User registered successfully: {email}")
         return jsonify({"message": "User registered successfully", "token": access_token}), 201
         
     except Exception as e:
@@ -118,20 +118,29 @@ def register():
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.get_json()
+    email = data.get("email")
+    password = data.get("password")
     
-    # Find user by email only
-    user = mongo.db.users.find_one({"email": data["email"]})
+    # Find user by email
+    user = mongo.db.users.find_one({"email": email})
     
-    # Check if user exists and password matches
-    if not user or not bcrypt.checkpw(data["password"].encode('utf-8'), user["password"].encode('utf-8')):  # Fixed missing parenthesis
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    # Verify the password
+    if not bcrypt.checkpw(password.encode('utf-8'), user["password"].encode('utf-8')):
         return jsonify({"error": "Invalid credentials"}), 401
     
+    # Create JWT token
     access_token = create_access_token(identity=str(user["_id"]))
     
-    return jsonify({"token": access_token, "user": {
-        "email": user["email"],
-        "streaming_services": user.get("streaming_services", [])
-    }}), 200
+    return jsonify({
+        "token": access_token,
+        "user": {
+            "email": user["email"],
+            "streaming_services": user.get("streaming_services", [])
+        }
+    }), 200
 
 # Update user streaming services
 @app.route("/api/user/streaming_services", methods=["PUT"])
@@ -438,4 +447,5 @@ def get_trending():
         return jsonify({"error": "Failed to fetch trending content"}), 500
 
 if __name__ == "__main__":
+    ensure_mongo_connection()
     app.run(debug=True)
