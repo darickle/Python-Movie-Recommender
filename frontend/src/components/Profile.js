@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import ApiService from './ApiService';
 import '../styles/profile.css'; // Import the profile styles
 import '../styles/forms.css'; // Import form styles for form elements
@@ -131,7 +132,7 @@ function Profile({ user, setUser }) {
         <div className="profile-section">
           <h3>Streaming Services</h3>
           <p>Manage which streaming services you use:</p>
-          <a href="/setup" className="btn btn-outline">Edit Streaming Services</a>
+          <Link to="/setup" className="btn btn-outline">Edit Streaming Services</Link>
         </div>
       </div>
     </div>

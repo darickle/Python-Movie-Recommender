@@ -59,6 +59,7 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [apiConnected, setApiConnected] = useState(false);
+  const [needsSetup, setNeedsSetup] = useState(false);
 
   useEffect(() => {
     // Check backend connection - update to use ApiService
@@ -81,7 +82,13 @@ function App() {
           if (token && userInfo) {
             // First set user from localStorage
             setIsAuthenticated(true);
-            setUser(JSON.parse(userInfo));
+            const userData = JSON.parse(userInfo);
+            setUser(userData);
+            
+            // Check if user needs to set up streaming services
+            if (!userData.streaming_services || userData.streaming_services.length === 0) {
+              setNeedsSetup(true);
+            }
             
             // Then fetch the latest user data including preferences
             ApiService.getCurrentUser()
@@ -89,6 +96,13 @@ function App() {
                 const userData = response.data.user;
                 setUser(userData);
                 localStorage.setItem('user', JSON.stringify(userData));
+                
+                // Update needs setup flag based on fresh data
+                if (!userData.streaming_services || userData.streaming_services.length === 0) {
+                  setNeedsSetup(true);
+                } else {
+                  setNeedsSetup(false);
+                }
               })
               .catch(error => {
                 console.error('Error fetching user data:', error);
@@ -109,6 +123,13 @@ function App() {
     localStorage.setItem('user', JSON.stringify(userData));
     setIsAuthenticated(true);
     setUser(userData);
+    
+    // Check if the user needs to set up streaming services
+    if (!userData.streaming_services || userData.streaming_services.length === 0) {
+      setNeedsSetup(true);
+    } else {
+      setNeedsSetup(false);
+    }
   };
 
   const logout = () => {
@@ -133,9 +154,13 @@ function App() {
         <Navbar isAuthenticated={isAuthenticated} logout={logout} user={user} />
         <div className="container">
           <Routes>
-            <Route path="/" element={isAuthenticated ? <Home user={user} /> : <Navigate to="/login" />} />
+            <Route path="/" element={
+              isAuthenticated 
+                ? <Home user={user} /> 
+                : <Navigate to="/login" />
+            } />
             <Route path="/login" element={!isAuthenticated ? <Login login={login} /> : <Navigate to="/" />} />
-            <Route path="/register" element={!isAuthenticated ? <Register login={login} /> : <Navigate to="/" />} />
+            <Route path="/register" element={!isAuthenticated ? <Register login={login} /> : <Navigate to="/setup" />} />
             <Route path="/setup" element={isAuthenticated ? <StreamingSetup user={user} setUser={setUser} /> : <Navigate to="/login" />} />
             <Route path="/movie/:id" element={isAuthenticated ? <MovieDetail /> : <Navigate to="/login" />} />
             <Route path="/watchlist" element={isAuthenticated ? <Watchlist /> : <Navigate to="/login" />} />

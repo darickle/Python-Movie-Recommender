@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '../styles/auth.css';
 
@@ -9,6 +9,7 @@ function Register({ login }) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const navigate = useNavigate();
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -29,6 +30,9 @@ function Register({ login }) {
       
       // Log user in after successful registration
       login(response.data.token, { email, streaming_services: [] });
+      
+      // Redirect to streaming setup
+      navigate('/setup');
     } catch (error) {
       setError(error.response?.data?.error || 'Registration failed. Please try again.');
     } finally {

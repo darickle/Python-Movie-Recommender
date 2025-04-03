@@ -54,6 +54,7 @@ function StreamingSetup({ user, setUser }) {
       setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
       
+      // Navigate to home page after successful update
       navigate('/');
     } catch (error) {
       console.error('Error updating streaming services:', error);
