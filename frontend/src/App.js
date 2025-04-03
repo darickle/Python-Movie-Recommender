@@ -13,7 +13,34 @@ import Watchlist from './components/Watchlist';
 import Profile from './components/Profile';
 
 // API configuration
-const API_URL = 'http://localhost:5001/api';
+const API_URL = 'http://localhost:5000/api';
+
+// Configure axios defaults
+axios.defaults.baseURL = API_URL;
+
+// Add response interceptor for better error handling
+axios.interceptors.response.use(
+  response => response,
+  error => {
+    // Handle API connection errors
+    if (error.code === 'ERR_NETWORK') {
+      console.error('Network error - Cannot connect to the backend server');
+      // You can add UI notification here
+    }
+    
+    // Handle token expiration
+    if (error.response && error.response.status === 401) {
+      if (error.response.data.code === 'token_expired') {
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        window.location.href = '/login';
+      }
+    }
+    
+    return Promise.reject(error);
+  }
+);
+
 axios.interceptors.request.use(
   config => {
     const token = localStorage.getItem('token');
@@ -31,17 +58,34 @@ function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [apiConnected, setApiConnected] = useState(false);
 
   useEffect(() => {
-    const token = localStorage.getItem('token');
-    const userInfo = localStorage.getItem('user');
-    
-    if (token && userInfo) {
-      setIsAuthenticated(true);
-      setUser(JSON.parse(userInfo));
-    }
-    
-    setLoading(false);
+    // Check backend connection - update to use ApiService
+    import('./components/ApiService').then(module => {
+      const ApiService = module.default;
+      ApiService.testConnection()
+        .then(response => {
+          console.log('API connection successful:', response.data);
+          setApiConnected(true);
+        })
+        .catch(error => {
+          console.error('Backend connection error:', error);
+          setApiConnected(false);
+        })
+        .finally(() => {
+          // Ensure loading state is updated even if connection fails
+          const token = localStorage.getItem('token');
+          const userInfo = localStorage.getItem('user');
+          
+          if (token && userInfo) {
+            setIsAuthenticated(true);
+            setUser(JSON.parse(userInfo));
+          }
+          
+          setLoading(false);
+        });
+    });
   }, []);
 
   const login = (token, userData) => {
@@ -65,6 +109,11 @@ function App() {
   return (
     <Router>
       <div className="app">
+        {!apiConnected && 
+          <div style={{ background: '#ffcccc', padding: '10px', textAlign: 'center' }}>
+            Warning: Cannot connect to the backend server. Please check if the server is running.
+          </div>
+        }
         <Navbar isAuthenticated={isAuthenticated} logout={logout} user={user} />
         <div className="container">
           <Routes>

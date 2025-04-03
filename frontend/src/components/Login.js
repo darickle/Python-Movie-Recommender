@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import ApiService from './ApiService';
 import '../styles/auth.css';
 
 function Login({ login }) {
@@ -13,16 +13,17 @@ function Login({ login }) {
     e.preventDefault();
     setError('');
     setIsLoading(true);
-    
+
     try {
-      const response = await axios.post('http://localhost:5000/api/login', {
-        email,
-        password
-      });
-      
+      const response = await ApiService.login({ email, password });
       login(response.data.token, response.data.user);
-    } catch (error) {
-      setError(error.response?.data?.error || 'Login failed. Please try again.');
+      console.log('Login successful');
+    } catch (err) {
+      console.error('Login error:', err);
+      setError(
+        err.response?.data?.error || 
+        'Failed to connect to the server. Please try again later.'
+      );
     } finally {
       setIsLoading(false);
     }

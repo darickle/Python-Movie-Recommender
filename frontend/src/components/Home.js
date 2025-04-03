@@ -1,70 +1,65 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import axios from 'axios';
+import ApiService from './ApiService';
 import '../styles/home.css';
 
 function Home({ user }) {
   const [recommendations, setRecommendations] = useState([]);
   const [trending, setTrending] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    const fetchContent = async () => {
+    const fetchData = async () => {
+      setLoading(true);
       try {
-        // Check if user has selected streaming services
+        // Check if user has streaming services setup
         if (!user.streaming_services || user.streaming_services.length === 0) {
+          setError('Please set up your streaming services first');
           setLoading(false);
           return;
         }
-        
-        // Fetch recommendations and trending content
-        const [recommendationsRes, trendingRes] = await Promise.all([
-          axios.get('http://localhost:5000/api/recommendations'),
-          axios.get('http://localhost:5000/api/trending')
+
+        // Fetch recommendations and trending content in parallel
+        const [recommendationsResponse, trendingResponse] = await Promise.all([
+          ApiService.getRecommendations(),
+          ApiService.getTrending()
         ]);
-        
-        setRecommendations(recommendationsRes.data);
-        setTrending(trendingRes.data);
-        setLoading(false);
-      } catch (error) {
-        console.error('Error fetching content:', error);
+
+        setRecommendations(recommendationsResponse.data);
+        setTrending(trendingResponse.data);
+      } catch (err) {
+        console.error('Error fetching home data:', err);
+        setError('Failed to load content. Please try again later.');
+      } finally {
         setLoading(false);
       }
     };
 
-    fetchContent();
+    fetchData();
   }, [user]);
 
   // Function to add movie to watchlist
   const addToWatchlist = async (contentId) => {
     try {
-      await axios.post('http://localhost:5000/api/watchlist', {
-        content_id: contentId
-      });
+      await ApiService.addToWatchlist(contentId);
       alert('Added to your watchlist!');
     } catch (error) {
       console.error('Error adding to watchlist:', error);
     }
   };
 
-  if (loading) {
+  if (loading) return <div>Loading...</div>;
+  
+  if (error) {
     return (
-      <div className="loading-container">
-        <div className="loading-spinner"></div>
-        <p>Loading recommendations...</p>
-      </div>
-    );
-  }
-
-  // If user hasn't set up streaming services yet
-  if (!user.streaming_services || user.streaming_services.length === 0) {
-    return (
-      <div className="home-no-services">
-        <h2>Welcome to Your Personalized Media Recommender!</h2>
-        <p>To get started, please tell us which streaming services you use.</p>
-        <Link to="/setup" className="btn btn-primary">
-          Set Up Your Streaming Services
-        </Link>
+      <div className="setup-prompt">
+        <p>{error}</p>
+        {(!user.streaming_services || user.streaming_services.length === 0) && (
+          <Link to="/setup" className="btn btn-primary">
+            Set Up Streaming Services
+          </Link>
+        )}
       </div>
     );
   }

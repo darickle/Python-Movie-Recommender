@@ -15,7 +15,12 @@ import certifi
 from functools import wraps
 
 app = Flask(__name__)
-CORS(app, resources={r"/api/*": {"origins": "http://localhost:3000", "methods": ["GET", "POST", "OPTIONS", "PUT"]}})
+# Update CORS configuration to properly handle preflight requests
+CORS(app, resources={r"/*": {
+    "origins": ["http://localhost:3000"], 
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    "allow_headers": ["Content-Type", "Authorization"]
+}}, supports_credentials=True)
 
 # Configuration
 app.config["MONGO_URI"] = config.MONGO_URI
@@ -196,6 +201,17 @@ def update_streaming_services():
         return jsonify({"message": "Streaming services updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": f"Failed to update streaming services: {str(e)}"}), 500
+
+# Add a simple status endpoint to test connectivity
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    print("Status endpoint was called!")  # Add this debug line
+    return jsonify({"status": "online", "message": "API is running correctly"})
+
+# Add an OPTIONS route handler to handle preflight requests
+@app.route('/api/<path:path>', methods=['OPTIONS'])
+def handle_options(path):
+    return '', 200
 
 # Search for content
 @app.route("/api/search", methods=["GET"])
@@ -504,7 +520,7 @@ def missing_token_callback(error):
 
 if __name__ == "__main__":
     if ensure_mongo_connection():
-        # Change default port from 5000 to 5001 to avoid conflict with Apple services on macOS
-        app.run(debug=True, port=5001, host='0.0.0.0')
+        # Make sure we're using port 5000 to match what the frontend expects
+        app.run(debug=True, port=5000, host='0.0.0.0')
     else:
         print("Failed to connect to MongoDB. Exiting application.")
