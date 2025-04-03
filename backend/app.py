@@ -29,7 +29,6 @@ client = MongoClient(
 )
 
 # Replace PyMongo initialization with the new client
-mongo = client.get_database()  # Ensure config.MONGO_URI includes a default database, e.g., "mongodb+srv://<user>:<password>@cluster.mongodb.net/mydatabase"
 db = client.get_database()  # Ensure db is the correct database object
 
 # Send a ping to confirm a successful connection
@@ -51,7 +50,7 @@ WATCHMODE_BASE_URL = "https://api.watchmode.com/v1"
 @app.route("/api/streaming_services", methods=["GET"])
 def get_streaming_services():
     # First check if we have this cached in our database
-    cached_services = mongo.db.streaming_services.find_one({"type": "all_services"})
+    cached_services = db.streaming_services.find_one({"type": "all_services"})
     
     if cached_services:
         return jsonify(cached_services["services"])
@@ -66,7 +65,7 @@ def get_streaming_services():
         subscription_services = [service for service in services if service.get("type") == "sub"]
         
         # Cache in database
-        mongo.db.streaming_services.insert_one({
+        db.streaming_services.insert_one({
             "type": "all_services",
             "services": subscription_services
         })
@@ -87,7 +86,7 @@ def register():
             return jsonify({"error": "Email and password are required"}), 400
         
         # Check if user already exists
-        if mongo.db.users.find_one({"email": email}):
+        if db.users.find_one({"email": email}):
             return jsonify({"error": "User already exists"}), 400
         
         # Hash the password (store as a string)
@@ -103,7 +102,7 @@ def register():
         }
         
         # Insert user into the database
-        result = mongo.db.users.insert_one(user)
+        result = db.users.insert_one(user)
         user_id = str(result.inserted_id)
         
         # Create access token
@@ -122,7 +121,7 @@ def login():
     password = data.get("password")
     
     # Find user by email
-    user = mongo.db.users.find_one({"email": email})
+    user = db.users.find_one({"email": email})
     
     if not user:
         return jsonify({"error": "User not found"}), 404
@@ -149,7 +148,7 @@ def update_streaming_services():
     user_id = get_jwt_identity()
     data = request.get_json()
     
-    mongo.db.users.update_one(
+    db.users.update_one(
         {"_id": ObjectId(user_id)},
         {"$set": {"streaming_services": data["streaming_services"]}}
     )
@@ -172,7 +171,7 @@ def search_content():
         
         # Cache results in database
         for item in results:
-            mongo.db.content.update_one(
+            db.content.update_one(
                 {"id": item["id"]},
                 {"$set": item},
                 upsert=True
@@ -186,7 +185,7 @@ def search_content():
 @app.route("/api/content/<content_id>", methods=["GET"])
 def get_content_details(content_id):
     # Check if we have this cached with recent sources data
-    cached_content = mongo.db.content_details.find_one({"id": content_id})
+    cached_content = db.content_details.find_one({"id": content_id})
     
     # If cached and recent (within 1 day), return cached data
     if cached_content:
@@ -200,7 +199,7 @@ def get_content_details(content_id):
         content_details = response.json()
         
         # Cache in database
-        mongo.db.content_details.update_one(
+        db.content_details.update_one(
             {"id": content_id},
             {"$set": content_details},
             upsert=True
@@ -215,7 +214,7 @@ def get_content_details(content_id):
 @jwt_required()
 def get_recommendations():
     user_id = get_jwt_identity()
-    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+    user = db.users.find_one({"_id": ObjectId(user_id)})
     
     if not user or not user.get("streaming_services"):
         return jsonify({"error": "User streaming services not set"}), 400
@@ -228,7 +227,7 @@ def get_recommendations():
     recommended_content = []
     
     # Get user's watch history and ratings if available
-    user_ratings = list(mongo.db.ratings.find({"user_id": user_id}))
+    user_ratings = list(db.ratings.find({"user_id": user_id}))
     
     # If user has ratings, use them for content-based recommendations
     if user_ratings:
@@ -236,7 +235,7 @@ def get_recommendations():
         liked_content = []
         for rating in user_ratings:
             if rating["rating"] >= 4:  # 4 or 5 star ratings
-                content = mongo.db.content_details.find_one({"id": rating["content_id"]})
+                content = db.content_details.find_one({"id": rating["content_id"]})
                 if content:
                     liked_content.append(content)
         
@@ -277,7 +276,7 @@ def get_recommendations():
             
             # Fetch details for these items
             for item_id in similar_items:
-                content = mongo.db.content_details.find_one({"id": item_id})
+                content = db.content_details.find_one({"id": item_id})
                 if content:
                     # Check if available on user's streaming services
                     sources = content.get("sources", [])
@@ -315,7 +314,7 @@ def get_recommendations():
                         recommended_content.append(content_details)
                         
                         # Cache in database
-                        mongo.db.content_details.update_one(
+                        db.content_details.update_one(
                             {"id": content_id},
                             {"$set": content_details},
                             upsert=True
@@ -340,7 +339,7 @@ def add_to_watchlist():
         "added_date": pd.Timestamp.now()
     }
     
-    mongo.db.watchlist.insert_one(watchlist_item)
+    db.watchlist.insert_one(watchlist_item)
     
     return jsonify({"message": "Added to watchlist successfully"}), 201
 
@@ -350,12 +349,12 @@ def add_to_watchlist():
 def get_watchlist():
     user_id = get_jwt_identity()
     
-    watchlist = list(mongo.db.watchlist.find({"user_id": user_id}))
+    watchlist = list(db.watchlist.find({"user_id": user_id}))
     
     # Get details for each item
     watchlist_with_details = []
     for item in watchlist:
-        content = mongo.db.content_details.find_one({"id": item["content_id"]})
+        content = db.content_details.find_one({"id": item["content_id"]})
         if content:
             watchlist_with_details.append({
                 "watchlist_id": str(item["_id"]),
@@ -381,7 +380,7 @@ def add_rating():
     }
     
     # Update if exists, otherwise insert
-    mongo.db.ratings.update_one(
+    db.ratings.update_one(
         {"user_id": user_id, "content_id": data["content_id"]},
         {"$set": rating_item},
         upsert=True
@@ -394,7 +393,7 @@ def add_rating():
 @jwt_required()
 def get_trending():
     user_id = get_jwt_identity()
-    user = mongo.db.users.find_one({"_id": ObjectId(user_id)})
+    user = db.users.find_one({"_id": ObjectId(user_id)})
     
     if not user or not user.get("streaming_services"):
         return jsonify({"error": "User streaming services not set"}), 400
@@ -432,7 +431,7 @@ def get_trending():
                         trending_items.append(item_details)
                         
                         # Cache in database
-                        mongo.db.content_details.update_one(
+                        db.content_details.update_one(
                             {"id": content_id},
                             {"$set": item_details},
                             upsert=True
