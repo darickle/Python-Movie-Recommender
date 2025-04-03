@@ -162,7 +162,8 @@ def login():
         "token": access_token,
         "user": {
             "email": user["email"],
-            "streaming_services": user.get("streaming_services", [])
+            "streaming_services": user.get("streaming_services", []),
+            "preferences": user.get("preferences", {})
         }
     }), 200
 
@@ -201,6 +202,29 @@ def update_streaming_services():
         return jsonify({"message": "Streaming services updated successfully"}), 200
     except Exception as e:
         return jsonify({"error": f"Failed to update streaming services: {str(e)}"}), 500
+
+# Update user preferences
+@app.route("/api/user/preferences", methods=["PUT"])
+@jwt_required()
+def update_user_preferences():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data or 'preferences' not in data:
+        return jsonify({"error": "Missing preferences data"}), 400
+    
+    try:
+        result = db.users.update_one(
+            {"_id": ObjectId(user_id)},
+            {"$set": {"preferences": data["preferences"]}}
+        )
+        
+        if result.matched_count == 0:
+            return jsonify({"error": "User not found"}), 404
+            
+        return jsonify({"message": "Preferences updated successfully"}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to update preferences: {str(e)}"}), 500
 
 # Add a simple status endpoint to test connectivity
 @app.route("/api/status", methods=["GET"])
@@ -502,6 +526,28 @@ def get_trending():
         return jsonify(trending_items)
     else:
         return jsonify({"error": "Failed to fetch trending content"}), 500
+
+# Get current user information
+@app.route("/api/user", methods=["GET"])
+@jwt_required()
+def get_current_user():
+    user_id = get_jwt_identity()
+    
+    try:
+        user = db.users.find_one({"_id": ObjectId(user_id)})
+        if not user:
+            return jsonify({"error": "User not found"}), 404
+            
+        # Don't include password in the response
+        user_data = {
+            "email": user["email"],
+            "streaming_services": user.get("streaming_services", []),
+            "preferences": user.get("preferences", {})
+        }
+            
+        return jsonify({"user": user_data}), 200
+    except Exception as e:
+        return jsonify({"error": f"Failed to get user data: {str(e)}"}), 500
 
 # Error handler for expired JWT tokens
 @jwt.expired_token_loader

@@ -21,7 +21,7 @@ function Navbar({ isAuthenticated, logout, user }) {
   return (
     <nav className="navbar">
       <div className="navbar-brand">
-        <Link to="/">MovieMatch</Link>
+        <Link to="/">Watchr</Link>
       </div>
       
       <button className="menu-toggle" onClick={toggleMenu}>

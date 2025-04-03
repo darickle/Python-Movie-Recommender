@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import axios from 'axios';
+import ApiService from './ApiService';
 import '../styles/profile.css'; // Import the profile styles
 import '../styles/forms.css'; // Import form styles for form elements
 import '../styles/buttons.css'; // Import button styles
@@ -57,10 +57,8 @@ function Profile({ user, setUser }) {
     setMessage('');
     
     try {
-      await axios.put('http://localhost:5000/api/user/preferences', {
-        preferences: {
-          genres: selectedGenres
-        }
+      await ApiService.updateUserPreferences({
+        genres: selectedGenres
       });
       
       // Update local user state

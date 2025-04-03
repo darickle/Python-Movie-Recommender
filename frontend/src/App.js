@@ -79,8 +79,24 @@ function App() {
           const userInfo = localStorage.getItem('user');
           
           if (token && userInfo) {
+            // First set user from localStorage
             setIsAuthenticated(true);
             setUser(JSON.parse(userInfo));
+            
+            // Then fetch the latest user data including preferences
+            ApiService.getCurrentUser()
+              .then(response => {
+                const userData = response.data.user;
+                setUser(userData);
+                localStorage.setItem('user', JSON.stringify(userData));
+              })
+              .catch(error => {
+                console.error('Error fetching user data:', error);
+                if (error.response && error.response.status === 401) {
+                  // Token expired or invalid, log out
+                  logout();
+                }
+              });
           }
           
           setLoading(false);

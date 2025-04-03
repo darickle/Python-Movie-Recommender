@@ -84,6 +84,16 @@ const ApiService = {
   // Trending
   getTrending: () => {
     return apiClient.get('/trending');
+  },
+  
+  // User preferences
+  updateUserPreferences: (preferences) => {
+    return apiClient.put('/user/preferences', { preferences });
+  },
+  
+  // Get current user data
+  getCurrentUser: () => {
+    return apiClient.get('/user');
   }
 };
 
