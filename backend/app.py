@@ -75,30 +75,21 @@ WATCHMODE_BASE_URL = "https://api.watchmode.com/v1"
 # Get list of available streaming services
 @app.route("/api/streaming_services", methods=["GET"])
 def get_streaming_services():
-    # First check if we have this cached in our database
-    cached_services = db.streaming_services.find_one({"type": "all_services"})
+    # Define the top 10 streaming services
+    TOP_STREAMING_SERVICES = [
+        {"source_id": 203, "name": "Netflix", "type": "sub"},
+        {"source_id": 26, "name": "Amazon Prime Video", "type": "sub"},
+        {"source_id": 372, "name": "Disney+", "type": "sub"},
+        {"source_id": 157, "name": "Hulu", "type": "sub"},
+        {"source_id": 387, "name": "HBO Max", "type": "sub"},
+        {"source_id": 444, "name": "Paramount+", "type": "sub"},
+        {"source_id": 389, "name": "Peacock", "type": "sub"},
+        {"source_id": 371, "name": "Apple TV+", "type": "sub"},
+        {"source_id": 442, "name": "Discovery+", "type": "sub"},
+        {"source_id": 443, "name": "ESPN+", "type": "sub"}
+    ]
     
-    if cached_services:
-        return jsonify(cached_services["services"])
-    
-    # If not cached, fetch from WatchMode API
-    url = f"{WATCHMODE_BASE_URL}/sources/?apiKey={WATCHMODE_API_KEY}"
-    response = requests.get(url)
-    
-    if response.status_code == 200:
-        services = response.json()
-        # Filter to only include subscription streaming services (not rentals)
-        subscription_services = [service for service in services if service.get("type") == "sub"]
-        
-        # Cache in database
-        db.streaming_services.insert_one({
-            "type": "all_services",
-            "services": subscription_services
-        })
-        
-        return jsonify(subscription_services)
-    else:
-        return jsonify({"error": "Failed to fetch streaming services"}), 500
+    return jsonify(TOP_STREAMING_SERVICES)
 
 @app.route("/api/register", methods=["POST"])
 @validate_request_data(["email", "password"])

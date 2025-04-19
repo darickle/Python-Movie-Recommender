@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import '../styles/streaming.css';
 
@@ -14,12 +14,15 @@ function StreamingSetup({ user, setUser, isInitialSetup, clearInitialSetup }) {
     // Fetch available streaming services
     const fetchStreamingServices = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/streaming_services');
+        const token = localStorage.getItem('token');
+        const response = await axios.get('http://localhost:5000/api/streaming_services', {
+          headers: { Authorization: `Bearer ${token}` }
+        });
         setStreamingServices(response.data);
         
         // Set user's existing selections if any
         if (user && user.streaming_services) {
-          setSelectedServices(user.streaming_services);
+          setSelectedServices(user.streaming_services.map(id => id.toString()));
         }
         
         setLoading(false);
@@ -33,21 +36,27 @@ function StreamingSetup({ user, setUser, isInitialSetup, clearInitialSetup }) {
     fetchStreamingServices();
   }, [user]);
 
-  const handleServiceToggle = (serviceId) => {
-    if (selectedServices.includes(serviceId)) {
-      setSelectedServices(selectedServices.filter(id => id !== serviceId));
-    } else {
-      setSelectedServices([...selectedServices, serviceId]);
-    }
+  const handleServiceToggle = (sourceId) => {
+    setSelectedServices(prev => {
+      const sourceIdStr = sourceId.toString();
+      if (prev.includes(sourceIdStr)) {
+        return prev.filter(id => id !== sourceIdStr);
+      } else {
+        return [...prev, sourceIdStr];
+      }
+    });
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
     
     try {
-      await axios.put('http://localhost:5000/api/user/streaming_services', {
-        streaming_services: selectedServices
-      });
+      const token = localStorage.getItem('token');
+      await axios.put(
+        'http://localhost:5000/api/user/streaming_services',
+        { streaming_services: selectedServices },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
       
       // Update local user state
       const updatedUser = { ...user, streaming_services: selectedServices };
@@ -94,14 +103,14 @@ function StreamingSetup({ user, setUser, isInitialSetup, clearInitialSetup }) {
         <form onSubmit={handleSubmit}>
           <div className="services-grid">
             {streamingServices.map(service => (
-              <div key={service.id} className="service-item">
+              <div key={service.source_id} className="service-item">
                 <input
                   type="checkbox"
-                  id={`service-${service.id}`}
-                  checked={selectedServices.includes(service.id)}
-                  onChange={() => handleServiceToggle(service.id)}
+                  id={`service-${service.source_id}`}
+                  checked={selectedServices.includes(service.source_id.toString())}
+                  onChange={() => handleServiceToggle(service.source_id)}
                 />
-                <label htmlFor={`service-${service.id}`}>
+                <label htmlFor={`service-${service.source_id}`}>
                   {service.name}
                 </label>
               </div>

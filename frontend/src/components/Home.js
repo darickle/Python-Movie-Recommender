@@ -73,25 +73,54 @@ function Home({ user, needsSetup }) {
 
   const hasNoContent = recommendations.length === 0 && trending.length === 0;
 
+  // Helper function to get the best available image URL
+  const getImageUrl = (item) => {
+    // Try different possible image URL properties
+    const possibleUrls = [
+      item.poster_url,
+      item.poster_path,
+      item.poster,
+      item.backdrop_url,
+      item.backdrop_path,
+      item.backdrop
+    ];
+    
+    // Find the first non-null, non-empty URL
+    const validUrl = possibleUrls.find(url => url && url.trim() !== '');
+    
+    // Return fallback image if no valid URL found
+    return validUrl || 'https://via.placeholder.com/300x450?text=No+Image';
+  };
+
   // Helper function to render consistent content cards with WatchMode data
   const renderContentCard = (item) => {
-    const posterUrl = item.poster_url || item.poster || 'https://via.placeholder.com/150x225?text=No+Image';
-    const title = item.title || item.name;
-    const year = item.year || '';
+    if (!item || !item.id) {
+      console.warn('Invalid content item:', item);
+      return null;
+    }
+    
+    const title = item.title || item.name || 'Unknown Title';
+    const posterUrl = getImageUrl(item);
+    const year = item.year || item.release_year || '';
     
     return (
       <div key={item.id} className="content-card">
-        <img src={posterUrl} alt={title} />
-        <div className="content-card-body">
-          <h3>{title}</h3>
-          <p>{year}</p>
-          <div className="card-actions">
-            <Link to={`/movie/${item.id}`} className="btn btn-small">View Details</Link>
-            <button onClick={() => addToWatchlist(item.id)} className="btn btn-small btn-outline">
-              + Watchlist
-            </button>
+        <Link to={`/movie/${item.id}`}>
+          <div className="content-image">
+            <img 
+              src={posterUrl}
+              alt={title}
+              onError={(e) => {
+                e.target.onerror = null; // Prevent infinite loop
+                e.target.src = 'https://via.placeholder.com/300x450?text=No+Image';
+              }}
+            />
           </div>
-        </div>
+          <div className="content-info">
+            <h4>{title}</h4>
+            {year && <p>{year}</p>}
+          </div>
+        </Link>
       </div>
     );
   };
