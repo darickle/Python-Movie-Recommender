@@ -182,6 +182,7 @@ def update_streaming_services():
     data = request.get_json()
     
     try:
+        # Update user's streaming services
         result = db.users.update_one(
             {"_id": ObjectId(user_id)},
             {"$set": {"streaming_services": data["streaming_services"]}}
@@ -189,6 +190,10 @@ def update_streaming_services():
         
         if result.matched_count == 0:
             return jsonify({"error": "User not found"}), 404
+            
+        # Refresh content for the updated services
+        from utils.streaming_services import StreamingService
+        StreamingService.refresh_content_for_services(data["streaming_services"])
             
         return jsonify({"message": "Streaming services updated successfully"}), 200
     except Exception as e:
