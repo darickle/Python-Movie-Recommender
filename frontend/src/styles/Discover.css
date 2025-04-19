@@ -145,3 +145,44 @@
 .error {
   color: #d32f2f;
 }
+
+/* Add styling for content type and streaming service badges */
+.content-info-header {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  display: flex;
+  gap: 8px;
+  z-index: 5;
+}
+
+.content-type-badge, .streaming-service-badge {
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: bold;
+  color: white;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.content-type-badge {
+  background-color: #e50914; /* Netflix-like red */
+}
+
+.streaming-service-badge {
+  background-color: #0063dc; /* Blue */
+}
+
+/* Adjust for the badges on mobile */
+@media (max-width: 768px) {
+  .content-info-header {
+    top: 5px;
+    left: 5px;
+  }
+  
+  .content-type-badge, .streaming-service-badge {
+    padding: 3px 6px;
+    font-size: 10px;
+  }
+}

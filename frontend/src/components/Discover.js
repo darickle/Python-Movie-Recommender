@@ -152,6 +152,16 @@ function Discover() {
       
       <div className="card-container">
         <div className={`content-card ${animationClass}`}>
+          <div className="content-info-header">
+            <span className="content-type-badge">
+              {currentContent.content_type === 'movie' ? 'Movie' : 'TV Show'}
+            </span>
+            {currentContent.streaming_service && (
+              <span className="streaming-service-badge">
+                {currentContent.streaming_service.charAt(0).toUpperCase() + currentContent.streaming_service.slice(1)}
+              </span>
+            )}
+          </div>
           <div className="content-image">
             <img 
               src={currentContent.poster_url || 'https://via.placeholder.com/300x450'}

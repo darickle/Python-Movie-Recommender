@@ -1012,11 +1012,10 @@ def get_next_content():
     user_id = get_jwt_identity()
     user = db.users.find_one({"_id": ObjectId(user_id)})
     
-    # Get user's seen content
-    seen_content = set(item["content_id"] for item in db.content_preferences.find(
-        {"user_id": user_id},
-        {"content_id": 1}
-    ))
+    # Get user's preferences directly from user document
+    liked_content = set(user.get('liked_content', []) if user else [])
+    disliked_content = set(user.get('disliked_content', []) if user else [])
+    seen_content = liked_content.union(disliked_content)
     
     try:
         # Import the StreamingService class
@@ -1074,20 +1073,31 @@ def record_preference():
     if not data or "content_id" not in data or "preference" not in data:
         return jsonify({"error": "Missing required fields"}), 400
     
+    content_id = data["content_id"]
+    preference = data["preference"]  # "like" or "dislike"
+    
     try:
-        preference = {
-            "user_id": user_id,
-            "content_id": data["content_id"],
-            "preference": data["preference"],  # "like" or "dislike"
-            "timestamp": pd.Timestamp.now()
-        }
-        
-        # Store preference
-        db.content_preferences.update_one(
-            {"user_id": user_id, "content_id": data["content_id"]},
-            {"$set": preference},
-            upsert=True
-        )
+        # Update the user document directly
+        if preference == "like":
+            # Add to liked_content and remove from disliked_content if present
+            db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {
+                    "$addToSet": {"liked_content": content_id},
+                    "$pull": {"disliked_content": content_id}
+                }
+            )
+        elif preference == "dislike":
+            # Add to disliked_content and remove from liked_content if present
+            db.users.update_one(
+                {"_id": ObjectId(user_id)},
+                {
+                    "$addToSet": {"disliked_content": content_id},
+                    "$pull": {"liked_content": content_id}
+                }
+            )
+        else:
+            return jsonify({"error": "Invalid preference value"}), 400
         
         return jsonify({"message": "Preference recorded successfully"}), 201
         

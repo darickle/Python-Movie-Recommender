@@ -231,35 +231,59 @@ class StreamingService:
 
     @staticmethod
     def get_discover_content(user_services=None):
-        """Get content for discover feature with timeout handling."""
+        """Get content for discover feature with timeout handling, ensuring both movies and shows appear."""
         try:
+            # Track what we've already seen to ensure variety
+            content_types_seen = []
+            
             # If user has services, try to get content for them
-            if user_services and len(user_services) > 0:
+            if (user_services and len(user_services) > 0):
                 # Convert to strings
                 user_services = [str(sid) for sid in user_services]
                 
                 # First check if we have cached content for these services
+                # Try to balance movies and shows
+                for content_type in ["movie", "show"]:
+                    if random.choice([True, False]):  # 50% chance to choose this type first
+                        cached_content = list(db.content_cache.find(
+                            {
+                                "service_ids": {"$in": user_services},
+                                "content_type": content_type
+                            },
+                            {"_id": 0}
+                        ).limit(50))
+                        
+                        if cached_content:
+                            content_types_seen.append(content_type)
+                            return random.choice(cached_content)
+                
+                # If we don't have specific content type or the random check failed, get any type
                 cached_content = list(db.content_cache.find(
                     {"service_ids": {"$in": user_services}},
                     {"_id": 0}
                 ).limit(100))
                 
-                if cached_content and len(cached_content) > 10:
+                if cached_content and len(cached_content) > 5:
                     # We have enough cached content, return a random one
                     return random.choice(cached_content)
                 
-                # If not enough cached content, try a direct API call for one random service
+                # If not enough cached content, try direct API calls for both content types
                 valid_services = []
                 for service_id in user_services:
                     if service_id in SERVICE_MAPPING:
                         valid_services.append(SERVICE_MAPPING[service_id])
                 
                 if valid_services:
+                    # Select random service from user's services
                     service = random.choice(valid_services)
-                    content_type = random.choice(["movie", "series"])
                     
-                    # Make a quick API call with short timeout
-                    req_path = f"/search/basic?country=us&service={service}&type={content_type}&page=1&language=en&sort_by=popularity"
+                    # Try both content types with 50/50 chance of which to try first
+                    content_types = ["movie", "series"]
+                    if random.choice([True, False]):
+                        content_types.reverse()
+                    
+                    # Try first content type
+                    req_path = f"/search/basic?country=us&service={service}&type={content_types[0]}&page=1&language=en&sort_by=popularity"
                     content_data = make_api_request(req_path, max_retries=2, timeout=5)
                     
                     if "results" in content_data and content_data["results"]:
@@ -272,13 +296,47 @@ class StreamingService:
                                 "id": item_id,
                                 "title": item.get("title", ""),
                                 "year": item.get("year", ""),
-                                "content_type": "movie" if content_type == "movie" else "show",
+                                "content_type": "movie" if content_types[0] == "movie" else "show",
                                 "runtime_minutes": item.get("runtime", 0),
                                 "us_rating": item.get("rating", "Not Rated"),
                                 "poster_url": (item.get("posterURLs", {}).get("original") or 
                                               item.get("posterURLs", {}).get("500", "")),
                                 "plot_overview": item.get("overview", ""),
-                                "service_ids": user_services
+                                "service_ids": user_services,
+                                "streaming_service": service
+                            }
+                            
+                            # Cache this item
+                            db.content_cache.update_one(
+                                {"id": item_id},
+                                {"$set": transformed_item},
+                                upsert=True
+                            )
+                            
+                            return transformed_item
+                    
+                    # If first content type failed, try second one
+                    req_path = f"/search/basic?country=us&service={service}&type={content_types[1]}&page=1&language=en&sort_by=popularity"
+                    content_data = make_api_request(req_path, max_retries=2, timeout=5)
+                    
+                    if "results" in content_data and content_data["results"]:
+                        item = random.choice(content_data["results"])
+                        
+                        # Transform to our format
+                        item_id = item.get("imdbId")
+                        if item_id:
+                            transformed_item = {
+                                "id": item_id,
+                                "title": item.get("title", ""),
+                                "year": item.get("year", ""),
+                                "content_type": "movie" if content_types[1] == "movie" else "show",
+                                "runtime_minutes": item.get("runtime", 0),
+                                "us_rating": item.get("rating", "Not Rated"),
+                                "poster_url": (item.get("posterURLs", {}).get("original") or 
+                                              item.get("posterURLs", {}).get("500", "")),
+                                "plot_overview": item.get("overview", ""),
+                                "service_ids": user_services,
+                                "streaming_service": service
                             }
                             
                             # Cache this item
@@ -291,6 +349,20 @@ class StreamingService:
                             return transformed_item
             
             # If no services or API call failed, get a random item from cache
+            # Try to balance movies and shows
+            content_type_to_try = random.choice(["movie", "show"])
+            sample_content = list(db.content_cache.find(
+                {
+                    "id": {"$exists": True, "$ne": "last_update"},
+                    "content_type": content_type_to_try
+                },
+                {"_id": 0}
+            ).limit(30))
+            
+            if sample_content:
+                return random.choice(sample_content)
+            
+            # If specific content type search failed, try any type
             sample_content = list(db.content_cache.find(
                 {"id": {"$exists": True, "$ne": "last_update"}},
                 {"_id": 0}
@@ -299,34 +371,122 @@ class StreamingService:
             if sample_content:
                 return random.choice(sample_content)
                 
-            # Last resort: return a hardcoded popular movie
-            return {
-                "id": "tt0111161",  # The Shawshank Redemption
-                "title": "The Shawshank Redemption",
-                "year": "1994",
-                "content_type": "movie",
-                "runtime_minutes": 142,
-                "us_rating": "R",
-                "poster_url": "https://m.media-amazon.com/images/M/MV5BNDE3ODcxYzMtY2YzZC00NmNlLWJiNDMtZDViZWM2MzIxZDYwXkEyXkFqcGdeQXVyNjAwNDUxODI@._V1_.jpg",
-                "plot_overview": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.",
-                "service_ids": []
-            }
+            # Last resort: return one of these popular movies/shows randomly
+            popular_fallbacks = [
+                # Movies
+                {
+                    "id": "tt0111161",
+                    "title": "The Shawshank Redemption",
+                    "year": "1994",
+                    "content_type": "movie",
+                    "runtime_minutes": 142,
+                    "us_rating": "R",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BNDE3ODcxYzMtY2YzZC00NmNlLWJiNDMtZDViZWM2MzIxZDYwXkEyXkFqcGdeQXVyNjAwNDUxODI@._V1_.jpg",
+                    "plot_overview": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.",
+                    "service_ids": user_services or [],
+                    "streaming_service": "netflix" if "203" in (user_services or []) else None
+                },
+                {
+                    "id": "tt0068646",
+                    "title": "The Godfather",
+                    "year": "1972",
+                    "content_type": "movie",
+                    "runtime_minutes": 175,
+                    "us_rating": "R",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BM2MyNjYxNmUtYTAwNi00MTYxLWJmNWYtYzZlODY3ZTk3OTFlXkEyXkFqcGdeQXVyNzkwMjQ5NzM@._V1_.jpg",
+                    "plot_overview": "The aging patriarch of an organized crime dynasty transfers control of his clandestine empire to his reluctant son.",
+                    "service_ids": user_services or [],
+                    "streaming_service": "prime" if "26" in (user_services or []) else None
+                },
+                # TV Shows
+                {
+                    "id": "tt0944947",
+                    "title": "Game of Thrones",
+                    "year": "2011",
+                    "content_type": "show",
+                    "runtime_minutes": 60,
+                    "us_rating": "TV-MA",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BYTRiNDQwYzAtMzVlZS00NTI5LWJjYjUtMzkwNTUzMWMxZTllXkEyXkFqcGdeQXVyNjIyNDgwMzM@._V1_.jpg",
+                    "plot_overview": "Nine noble families fight for control over the lands of Westeros, while an ancient enemy returns after being dormant for millennia.",
+                    "service_ids": user_services or [],
+                    "streaming_service": "hbo" if "387" in (user_services or []) else None
+                },
+                {
+                    "id": "tt0108778",
+                    "title": "Friends",
+                    "year": "1994",
+                    "content_type": "show",
+                    "runtime_minutes": 22,
+                    "us_rating": "TV-14",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BNDVkYjU0MzctMWRmZi00NTkxLTgwZWEtOWVhYjZlYjllYmU4XkEyXkFqcGdeQXVyNTA4NzY1MzY@._V1_.jpg",
+                    "plot_overview": "Follows the personal and professional lives of six twenty to thirty-something-year-old friends living in Manhattan.",
+                    "service_ids": user_services or [],
+                    "streaming_service": "hbo" if "387" in (user_services or []) else None
+                },
+                {
+                    "id": "tt0455275",
+                    "title": "The Office",
+                    "year": "2005",
+                    "content_type": "show",
+                    "runtime_minutes": 22,
+                    "us_rating": "TV-14",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BMDNkOTE4NDQtMTNmYi00MWE0LWE4ZTktYTc0NzhhNWIzNzJiXkEyXkFqcGdeQXVyMzQ2MDI5NjU@._V1_.jpg", 
+                    "plot_overview": "A mockumentary on a group of typical office workers, where the workday consists of ego clashes, inappropriate behavior, and tedium.",
+                    "service_ids": user_services or [],
+                    "streaming_service": "peacock" if "389" in (user_services or []) else None
+                }
+            ]
+            
+            # Choose based on content type balance
+            movies = [item for item in popular_fallbacks if item["content_type"] == "movie"]
+            shows = [item for item in popular_fallbacks if item["content_type"] == "show"]
+            
+            if not content_types_seen:
+                # If no preference yet, choose randomly between movies and shows
+                if random.choice([True, False]):
+                    return random.choice(movies)
+                else:
+                    return random.choice(shows)
+            elif "movie" in content_types_seen:
+                # If we've seen movies, try to return a show
+                return random.choice(shows)
+            else:
+                # If we've seen shows, try to return a movie
+                return random.choice(movies)
             
         except Exception as e:
             print(f"Error getting discover content: {str(e)}")
-            # Return a fallback content item
-            return {
-                "id": "tt0111161",  # The Shawshank Redemption
-                "title": "The Shawshank Redemption",
-                "year": "1994",
-                "content_type": "movie",
-                "runtime_minutes": 142,
-                "us_rating": "R",
-                "poster_url": "https://m.media-amazon.com/images/M/MV5BNDE3ODcxYzMtY2YzZC00NmNlLWJiNDMtZDViZWM2MzIxZDYwXkEyXkFqcGdeQXVyNjAwNDUxODI@._V1_.jpg",
-                "plot_overview": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.",
-                "service_ids": []
-            }
-    
+            # Return a random fallback content item from movies and shows
+            popular_fallbacks = [
+                # Movie fallbacks
+                {
+                    "id": "tt0111161",
+                    "title": "The Shawshank Redemption",
+                    "year": "1994",
+                    "content_type": "movie",
+                    "runtime_minutes": 142,
+                    "us_rating": "R",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BNDE3ODcxYzMtY2YzZC00NmNlLWJiNDMtZDViZWM2MzIxZDYwXkEyXkFqcGdeQXVyNjAwNDUxODI@._V1_.jpg",
+                    "plot_overview": "Two imprisoned men bond over a number of years, finding solace and eventual redemption through acts of common decency.",
+                    "service_ids": user_services or []
+                },
+                # TV Show fallbacks
+                {
+                    "id": "tt0944947",
+                    "title": "Game of Thrones",
+                    "year": "2011",
+                    "content_type": "show",
+                    "runtime_minutes": 60,
+                    "us_rating": "TV-MA",
+                    "poster_url": "https://m.media-amazon.com/images/M/MV5BYTRiNDQwYzAtMzVlZS00NTI5LWJjYjUtMzkwNTUzMWMxZTllXkEyXkFqcGdeQXVyNjIyNDgwMzM@._V1_.jpg",
+                    "plot_overview": "Nine noble families fight for control over the lands of Westeros, while an ancient enemy returns after being dormant for millennia.",
+                    "service_ids": user_services or []
+                }
+            ]
+            
+            # Randomly choose between movie and show
+            return random.choice(popular_fallbacks)
+
     @staticmethod
     def get_content_for_services(service_ids, content_type=None, limit=50):
         """Retrieve cached content for specified streaming services."""
