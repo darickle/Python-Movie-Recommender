@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Route, Routes, Navigate } from 'react-router-dom';
+import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 
 // Components
@@ -11,6 +11,7 @@ import Home from './components/Home';
 import MovieDetail from './components/MovieDetail';
 import Watchlist from './components/Watchlist';
 import Profile from './components/Profile';
+import Discover from './components/Discover';  // Import the new Discover component
 
 // API configuration
 const API_URL = 'http://localhost:5000/api';
@@ -60,6 +61,7 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [apiConnected, setApiConnected] = useState(false);
   const [needsSetup, setNeedsSetup] = useState(false);
+  const [isInitialSetup, setIsInitialSetup] = useState(false);
 
   useEffect(() => {
     // Check backend connection - update to use ApiService
@@ -132,6 +134,12 @@ function App() {
     }
   };
 
+  // Function to handle post-registration flow
+  const handleRegistration = (token, userData) => {
+    login(token, userData);
+    setIsInitialSetup(true);  // Mark as initial setup
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('user');
@@ -139,19 +147,22 @@ function App() {
     setUser(null);
   };
 
-  if (loading) {
-    return <div>Loading...</div>;
-  }
-
-  return (
-    <Router>
+  // We can't use hooks like useLocation directly in App since it's outside the Router
+  // We'll create a wrapper component to handle the navbar visibility
+  const AppContent = () => {
+    const location = useLocation();
+    
+    return (
       <div className="app">
         {!apiConnected && 
           <div style={{ background: '#ffcccc', padding: '10px', textAlign: 'center' }}>
             Warning: Cannot connect to the backend server. Please check if the server is running.
           </div>
         }
-        <Navbar isAuthenticated={isAuthenticated} logout={logout} user={user} />
+        {/* Only show navbar when not in initial setup */}
+        {!(isInitialSetup && location.pathname === '/setup') && 
+          <Navbar isAuthenticated={isAuthenticated} logout={logout} user={user} />
+        }
         <div className="container">
           <Routes>
             <Route path="/" element={
@@ -160,14 +171,34 @@ function App() {
                 : <Navigate to="/login" />
             } />
             <Route path="/login" element={!isAuthenticated ? <Login login={login} /> : <Navigate to="/" />} />
-            <Route path="/register" element={!isAuthenticated ? <Register login={login} /> : <Navigate to="/setup" />} />
-            <Route path="/setup" element={isAuthenticated ? <StreamingSetup user={user} setUser={setUser} /> : <Navigate to="/login" />} />
+            <Route path="/register" element={!isAuthenticated ? <Register login={handleRegistration} /> : <Navigate to="/setup" />} />
+            <Route path="/setup" element={
+              isAuthenticated 
+                ? <StreamingSetup 
+                    user={user} 
+                    setUser={setUser} 
+                    isInitialSetup={isInitialSetup}
+                    clearInitialSetup={() => setIsInitialSetup(false)}
+                  /> 
+                : <Navigate to="/login" />
+            } />
             <Route path="/movie/:id" element={isAuthenticated ? <MovieDetail /> : <Navigate to="/login" />} />
             <Route path="/watchlist" element={isAuthenticated ? <Watchlist /> : <Navigate to="/login" />} />
             <Route path="/profile" element={isAuthenticated ? <Profile user={user} setUser={setUser} /> : <Navigate to="/login" />} />
+            <Route path="/discover" element={isAuthenticated ? <Discover /> : <Navigate to="/login" />} />
           </Routes>
         </div>
       </div>
+    );
+  };
+
+  if (loading) {
+    return <div>Loading...</div>;
+  }
+
+  return (
+    <Router>
+      <AppContent />
     </Router>
   );
 }

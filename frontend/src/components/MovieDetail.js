@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
-import axios from 'axios';
+import ApiService from './ApiService';
 import '../styles/movie-detail.css'; // Import the movie-detail styles
 
 function MovieDetail() {
@@ -9,27 +9,31 @@ function MovieDetail() {
   const [userRating, setUserRating] = useState(0);
   const [review, setReview] = useState('');
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const fetchContentDetails = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/content/${id}`);
+        const response = await ApiService.getContentDetails(id);
+        console.log('Content details response:', response.data);
         setContent(response.data);
         
         // Check if user has already rated this content
         try {
-          const ratingResponse = await axios.get(`http://localhost:5000/api/ratings/${id}`);
+          const ratingResponse = await ApiService.getRating(id);
           if (ratingResponse.data) {
             setUserRating(ratingResponse.data.rating);
             setReview(ratingResponse.data.review || '');
           }
         } catch (error) {
           // User hasn't rated this content yet, which is fine
+          console.log('No existing rating found');
         }
         
         setLoading(false);
       } catch (error) {
         console.error('Error fetching content details:', error);
+        setError('Failed to load content details. Please try again later.');
         setLoading(false);
       }
     };
@@ -41,12 +45,7 @@ function MovieDetail() {
     e.preventDefault();
     
     try {
-      await axios.post('http://localhost:5000/api/ratings', {
-        content_id: id,
-        rating: userRating,
-        review: review
-      });
-      
+      await ApiService.addRating(id, userRating, review);
       alert('Your rating has been submitted!');
     } catch (error) {
       console.error('Error submitting rating:', error);
@@ -55,10 +54,7 @@ function MovieDetail() {
 
   const addToWatchlist = async () => {
     try {
-      await axios.post('http://localhost:5000/api/watchlist', {
-        content_id: id
-      });
-      
+      await ApiService.addToWatchlist(id);
       alert('Added to your watchlist!');
     } catch (error) {
       console.error('Error adding to watchlist:', error);
@@ -74,33 +70,48 @@ function MovieDetail() {
     );
   }
 
+  if (error) {
+    return <div className="error-container">{error}</div>;
+  }
+
   if (!content) {
     return <div className="container">Content not found</div>;
   }
+
+  // WatchMode API property mappings
+  const posterUrl = content.poster_url || content.poster || 'https://via.placeholder.com/300x450?text=No+Image';
+  const title = content.title || content.name;
+  const year = content.year || '';
+  const runtime = content.runtime_minutes || content.runtime || 'N/A';
+  const genres = (content.genre_names || []).join(', ') || 'N/A';
+  const rating = content.us_rating || content.rating || 'N/A';
+  const plot = content.plot_overview || content.plot || 'No plot description available';
+  const directors = (content.directors || []).join(', ') || 'Not available';
+  const cast = (content.cast || []).slice(0, 5).join(', ') || 'Not available';
 
   return (
     <div className="container">
       <div className="movie-detail">
         <div className="content-header">
           <img 
-            src={content.poster_url || 'https://via.placeholder.com/300x450?text=No+Image'} 
-            alt={content.title}
+            src={posterUrl} 
+            alt={title}
             className="content-poster"
           />
           
           <div className="content-info">
-            <h1>{content.title} ({content.year})</h1>
+            <h1>{title} ({year})</h1>
             <div className="content-meta">
-              <span>{content.runtime_minutes} min</span>
-              <span>{content.genre_names?.join(', ')}</span>
-              <span>Rating: {content.user_rating}/10</span>
+              <span>{runtime} min</span>
+              <span>{genres}</span>
+              <span>Rating: {rating}</span>
             </div>
             
-            <p className="content-plot">{content.plot_overview}</p>
+            <p className="content-plot">{plot}</p>
             
             <div className="content-credits">
-              <p><strong>Director:</strong> {content.directors?.join(', ')}</p>
-              <p><strong>Cast:</strong> {content.cast?.slice(0, 5).join(', ')}</p>
+              <p><strong>Director:</strong> {directors}</p>
+              <p><strong>Cast:</strong> {cast}</p>
             </div>
             
             <div className="content-actions">
@@ -111,10 +122,10 @@ function MovieDetail() {
             
             <div className="streaming-availability">
               <h3>Where to Watch</h3>
-              {content.sources?.length > 0 ? (
+              {content.sources && content.sources.length > 0 ? (
                 <ul className="services-list">
-                  {content.sources?.map(source => (
-                    <li key={source.source_id}>
+                  {content.sources.map((source, index) => (
+                    <li key={`${source.source_id}-${index}`}>
                       <a href={source.web_url} target="_blank" rel="noopener noreferrer">
                         {source.name} - {source.type}
                       </a>
@@ -165,7 +176,7 @@ function MovieDetail() {
             {content.similar_titles?.slice(0, 5).map(similar => (
               <div key={similar.id} className="content-card-small">
                 <img 
-                  src={similar.poster_url || 'https://via.placeholder.com/100x150?text=No+Image'} 
+                  src={similar.poster_url || similar.poster || 'https://via.placeholder.com/100x150?text=No+Image'} 
                   alt={similar.title}
                 />
                 <h4>{similar.title}</h4>

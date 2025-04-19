@@ -75,6 +75,11 @@ function Profile({ user, setUser }) {
       localStorage.setItem('user', JSON.stringify(updatedUser));
       
       setMessage('Profile updated successfully!');
+      
+      // Clear the message after 3 seconds
+      setTimeout(() => {
+        setMessage('');
+      }, 3000);
     } catch (error) {
       console.error('Error updating preferences:', error);
       setMessage('Failed to update profile. Please try again.');
@@ -96,7 +101,7 @@ function Profile({ user, setUser }) {
         <h2>Your Profile</h2>
         
         {message && (
-          <div className={message.includes('Failed') ? 'error-message' : 'success-message'}>
+          <div className={`message-banner ${message.includes('Failed') ? 'error-message' : 'success-message'}`}>
             {message}
           </div>
         )}

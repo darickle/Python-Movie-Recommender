@@ -265,20 +265,52 @@ def search_content():
 
 # Get content details with streaming availability
 @app.route("/api/content/<content_id>", methods=["GET"])
+@jwt_required()
 def get_content_details(content_id):
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    user_services = user.get("streaming_services", []) if user else []
+    
     # Check if we have this cached with recent sources data
     cached_content = db.content_details.find_one({"id": content_id})
     
-    # If cached and recent (within 1 day), return cached data
+    # If cached, return cached data
     if cached_content:
+        # Ensure we only include sources available on user's services if they have any
+        if user_services and "sources" in cached_content:
+            filtered_sources = [
+                source for source in cached_content["sources"]
+                if str(source.get("source_id", "")) in user_services
+            ]
+            cached_content["sources"] = filtered_sources
+        
         return jsonify(cached_content)
     
     # Fetch details from WatchMode API
-    url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
+    url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
     response = requests.get(url)
     
     if response.status_code == 200:
         content_details = response.json()
+        
+        # Fetch sources separately
+        sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
+        sources_response = requests.get(sources_url)
+        
+        if sources_response.status_code == 200:
+            sources = sources_response.json()
+            
+            # Filter sources to only include those on user's services
+            if user_services:
+                filtered_sources = [
+                    source for source in sources
+                    if str(source.get("source_id", "")) in user_services
+                ]
+                content_details["sources"] = filtered_sources
+            else:
+                content_details["sources"] = sources
+        else:
+            content_details["sources"] = []
         
         # Cache in database
         db.content_details.update_one(
@@ -291,6 +323,20 @@ def get_content_details(content_id):
     else:
         return jsonify({"error": "Failed to fetch content details"}), 500
 
+# Helper function to check if content is available on user's streaming services
+def is_available_on_user_services(sources, user_services):
+    if not sources or not user_services:
+        return False
+    
+    # Convert both to strings for comparison
+    user_services = [str(service_id) for service_id in user_services]
+    
+    for source in sources:
+        source_id = str(source.get("source_id", ""))
+        if source_id in user_services:
+            return True
+    return False
+
 # Get personalized recommendations
 @app.route("/api/recommendations", methods=["GET"])
 @jwt_required()
@@ -298,14 +344,17 @@ def get_recommendations():
     user_id = get_jwt_identity()
     user = db.users.find_one({"_id": ObjectId(user_id)})
     
-    if not user or not user.get("streaming_services"):
-        return jsonify({"error": "User streaming services not set"}), 400
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+        
+    if not user.get("streaming_services"):
+        return jsonify([]), 200  # Return empty list if no streaming services
     
     # Get user's streaming services
     user_services = user.get("streaming_services", [])
+    print(f"User streaming services: {user_services}")
     
     # Fetch content for these services
-    # First, get a sample of popular titles from WatchMode API to start with
     recommended_content = []
     
     # Get user's watch history and ratings if available
@@ -322,13 +371,12 @@ def get_recommendations():
                     liked_content.append(content)
         
         # Generate recommendations based on content similarity
-        # This is a simplified version - in a real app, you'd want more sophisticated logic
         if liked_content:
             # Create a simplified content representation for similarity calculation
             content_data = []
             for item in liked_content:
                 # Create a string of features for TF-IDF
-                features = f"{item.get('title', '')} {item.get('genre_names', '')} {item.get('network_names', '')}"
+                features = f"{item.get('title', '')} {' '.join(item.get('genre_names', []))}"
                 content_data.append({
                     "id": item["id"],
                     "features": features
@@ -337,76 +385,361 @@ def get_recommendations():
             # Convert to DataFrame for processing
             df = pd.DataFrame(content_data)
             
-            # Create TF-IDF vectors
-            tfidf = TfidfVectorizer(stop_words='english')
-            tfidf_matrix = tfidf.fit_transform(df['features'])
-            
-            # Calculate cosine similarity
-            cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-            
-            # Get indices of items user has liked
-            indices = df.index.tolist()
-            
-            # Get similar items
-            similar_items = []
-            for idx in indices:
-                similar_indices = cosine_sim[idx].argsort()[:-6:-1]  # Top 5 similar items
-                similar_items.extend([df.iloc[i]["id"] for i in similar_indices if i != idx])
-            
-            # Remove duplicates
-            similar_items = list(set(similar_items))
-            
-            # Fetch details for these items
-            for item_id in similar_items:
-                content = db.content_details.find_one({"id": item_id})
-                if content:
-                    # Check if available on user's streaming services
-                    sources = content.get("sources", [])
-                    available_on_user_services = any(source["source_id"] in user_services for source in sources)
+            if not df.empty and 'features' in df.columns:
+                # Create TF-IDF vectors
+                tfidf = TfidfVectorizer(stop_words='english')
+                try:
+                    tfidf_matrix = tfidf.fit_transform(df['features'])
                     
-                    if available_on_user_services:
-                        recommended_content.append(content)
+                    # Calculate cosine similarity
+                    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
+                    
+                    # Get indices of items user has liked
+                    indices = df.index.tolist()
+                    
+                    # Get similar items
+                    similar_items = []
+                    for idx in indices:
+                        similar_indices = cosine_sim[idx].argsort()[:-6:-1]  # Top 5 similar items
+                        similar_items.extend([df.iloc[i]["id"] for i in similar_indices if i != idx])
+                    
+                    # Remove duplicates
+                    similar_items = list(set(similar_items))
+                    
+                    # Fetch details for these items
+                    for item_id in similar_items:
+                        content = db.content_details.find_one({"id": item_id})
+                        if content:
+                            # Check if available on user's streaming services
+                            sources = content.get("sources", [])
+                            if is_available_on_user_services(sources, user_services):
+                                recommended_content.append(content)
+                except Exception as e:
+                    app.logger.error(f"Error in TF-IDF processing: {str(e)}")
     
     # If we don't have enough recommendations yet, get popular content from user's services
     if len(recommended_content) < 10:
-        # Get popular movies and shows available on user's streaming services
-        # This would typically be fetched from the API, but we'll use a simplified approach
-        # In a real app, you'd want to paginate and fetch more data
+        try:
+            # Get popular movies and shows available on user's streaming services
+            url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=30"
+            response = requests.get(url)
+            
+            if response.status_code == 200:
+                popular_content = response.json().get("titles", [])
+                
+                # For each item, check streaming availability
+                for item in popular_content:
+                    content_id = item["id"]
+                    
+                    # First check the cache
+                    cached_content = db.content_details.find_one({"id": content_id})
+                    
+                    if cached_content and "sources" in cached_content:
+                        # Use cached sources
+                        sources = cached_content.get("sources", [])
+                        if is_available_on_user_services(sources, user_services):
+                            recommended_content.append(cached_content)
+                    else:
+                        # Fetch from API
+                        details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
+                        details_response = requests.get(details_url)
+                        
+                        if details_response.status_code == 200:
+                            content_details = details_response.json()
+                            
+                            # Add sources if not included in details
+                            if "sources" not in content_details:
+                                sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
+                                sources_response = requests.get(sources_url)
+                                if sources_response.status_code == 200:
+                                    content_details["sources"] = sources_response.json()
+                            
+                            # Check if available on user's streaming services
+                            if is_available_on_user_services(content_details.get("sources", []), user_services):
+                                # Cache in database with sources
+                                db.content_details.update_one(
+                                    {"id": content_id},
+                                    {"$set": content_details},
+                                    upsert=True
+                                )
+                                
+                                recommended_content.append(content_details)
+                    
+                    # Stop once we have enough recommendations
+                    if len(recommended_content) >= 20:
+                        break
+            else:
+                app.logger.error(f"WatchMode API error: {response.status_code} - {response.text}")
+        except Exception as e:
+            app.logger.error(f"Error fetching recommendations: {str(e)}")
+    
+    # Log response for debugging
+    print(f"Returning {len(recommended_content)} recommended content items")
+    
+    return jsonify(recommended_content)
+
+# Get trending content available on user's services
+@app.route("/api/trending", methods=["GET"])
+@jwt_required()
+def get_trending():
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    
+    if not user:
+        return jsonify({"error": "User not found"}), 404
         
-        url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=20"
+    if not user.get("streaming_services"):
+        return jsonify([]), 200  # Return empty list if no streaming services
+    
+    user_services = user.get("streaming_services", [])
+    print(f"User streaming services for trending: {user_services}")
+    
+    trending_items = []
+    
+    try:
+        # Get trending movies and shows from WatchMode API
+        url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=30"
         response = requests.get(url)
         
         if response.status_code == 200:
-            popular_content = response.json().get("titles", [])
+            trending_results = response.json().get("titles", [])
             
-            # For each item, check streaming availability
-            for item in popular_content:
+            # Check availability on user's services
+            for item in trending_results:
                 content_id = item["id"]
-                details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
-                details_response = requests.get(details_url)
                 
-                if details_response.status_code == 200:
-                    content_details = details_response.json()
+                # First check if we have this cached
+                cached_content = db.content_details.find_one({"id": content_id})
+                
+                if cached_content and "sources" in cached_content:
+                    # Use cached data
+                    sources = cached_content.get("sources", [])
+                    if is_available_on_user_services(sources, user_services):
+                        trending_items.append(cached_content)
+                else:
+                    # Need to fetch sources from API
+                    sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
+                    sources_response = requests.get(sources_url)
                     
-                    # Check if available on user's streaming services
-                    sources = content_details.get("sources", [])
-                    available_on_user_services = any(source["source_id"] in user_services for source in sources)
-                    
-                    if available_on_user_services and content_details not in recommended_content:
-                        recommended_content.append(content_details)
+                    if sources_response.status_code == 200:
+                        sources = sources_response.json()
                         
-                        # Cache in database
-                        db.content_details.update_one(
-                            {"id": content_id},
-                            {"$set": content_details},
-                            upsert=True
-                        )
+                        # Check if available on user's services
+                        if is_available_on_user_services(sources, user_services):
+                            # Get full details
+                            details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
+                            details_response = requests.get(details_url)
+                            
+                            if details_response.status_code == 200:
+                                item_details = details_response.json()
+                                item_details["sources"] = sources
+                                
+                                # Cache in database
+                                db.content_details.update_one(
+                                    {"id": content_id},
+                                    {"$set": item_details},
+                                    upsert=True
+                                )
+                                
+                                trending_items.append(item_details)
                 
-                # Stop once we have enough recommendations
-                if len(recommended_content) >= 20:
+                # Stop once we have enough items
+                if len(trending_items) >= 10:
                     break
+        else:
+            app.logger.error(f"WatchMode API error in trending: {response.status_code} - {response.text}")
+    except Exception as e:
+        app.logger.error(f"Error fetching trending content: {str(e)}")
     
-    return jsonify(recommended_content)
+    # Log response for debugging
+    print(f"Returning {len(trending_items)} trending items")
+    
+    return jsonify(trending_items)
+
+# API endpoints for the discover page
+@app.route("/api/discover/categories", methods=["GET"])
+@jwt_required()
+def get_discover_categories():
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+        
+    if not user.get("streaming_services"):
+        return jsonify({}), 200  # Return empty object if no streaming services
+    
+    user_services = user.get("streaming_services", [])
+    print(f"User streaming services for categories: {user_services}")
+    
+    # Prepare content categories
+    categories = {
+        "Movies": [],
+        "TV Shows": [],
+        "Action & Adventure": [],
+        "Comedy": [],
+        "Drama": [],
+        "Family": []
+    }
+    
+    try:
+        # Populate each category with content available on user's streaming services
+        for category_name in categories.keys():
+            # Determine query parameters based on category
+            params = {
+                "apiKey": WATCHMODE_API_KEY,
+                "limit": 15,
+                "sort_by": "popularity_desc"
+            }
+            
+            if category_name == "Movies":
+                params["types"] = "movie"
+            elif category_name == "TV Shows":
+                params["types"] = "show"
+            else:
+                # For genre categories, we need to map category names to genre IDs
+                # This is a simplified approach - in a real app, you'd have a proper mapping
+                genre_mapping = {
+                    "Action & Adventure": "1,2",  # Sample genre IDs
+                    "Comedy": "3",
+                    "Drama": "4",
+                    "Family": "5"
+                }
+                params["genres"] = genre_mapping.get(category_name, "")
+            
+            # Fetch content from WatchMode API
+            url = f"{WATCHMODE_BASE_URL}/list-titles/"
+            response = requests.get(url, params=params)
+            
+            if response.status_code == 200:
+                results = response.json().get("titles", [])
+                
+                # Filter content by user's streaming services
+                filtered_content = []
+                for item in results[:10]:  # Limit to 10 items per category
+                    content_id = item["id"]
+                    
+                    # Check if we have cached sources data
+                    cached_details = db.content_details.find_one({"id": content_id})
+                    
+                    if cached_details and "sources" in cached_details:
+                        # Use cached data
+                        if is_available_on_user_services(cached_details.get("sources", []), user_services):
+                            filtered_content.append(cached_details)
+                    else:
+                        # Fetch sources from API
+                        sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
+                        sources_response = requests.get(sources_url)
+                        
+                        if sources_response.status_code == 200:
+                            sources = sources_response.json()
+                            
+                            # Check if available on user's streaming services
+                            if is_available_on_user_services(sources, user_services):
+                                # Get full details
+                                details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
+                                details_response = requests.get(details_url)
+                                
+                                if details_response.status_code == 200:
+                                    item_details = details_response.json()
+                                    item_details["sources"] = sources
+                                    
+                                    # Cache in database
+                                    db.content_details.update_one(
+                                        {"id": content_id},
+                                        {"$set": item_details},
+                                        upsert=True
+                                    )
+                                    
+                                    filtered_content.append(item_details)
+                
+                categories[category_name] = filtered_content
+            else:
+                app.logger.error(f"WatchMode API error in category {category_name}: {response.status_code} - {response.text}")
+    except Exception as e:
+        app.logger.error(f"Error fetching discover categories: {str(e)}")
+    
+    # Log response for debugging
+    category_counts = {name: len(items) for name, items in categories.items()}
+    print(f"Returning categories with item counts: {category_counts}")
+    
+    return jsonify(categories)
+
+@app.route("/api/discover/category/<category_name>", methods=["GET"])
+@jwt_required()
+def get_category_content(category_name):
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    
+    if not user or not user.get("streaming_services"):
+        return jsonify({"error": "User streaming services not set"}), 400
+    
+    user_services = user.get("streaming_services", [])
+    
+    # Determine query parameters based on category
+    params = {
+        "apiKey": WATCHMODE_API_KEY,
+        "limit": 30
+    }
+    
+    # Map category name to appropriate API parameters
+    # This is a simplified approach - in a real app, you'd have a proper mapping system
+    if category_name.lower() == "movies":
+        params["types"] = "movie"
+    elif category_name.lower() in ["tv", "shows", "tv shows"]:
+        params["types"] = "show"
+    elif category_name.lower() in ["action", "adventure", "action & adventure"]:
+        params["genres"] = "1,2"  # Sample genre IDs
+    elif category_name.lower() == "comedy":
+        params["genres"] = "3"
+    elif category_name.lower() == "drama":
+        params["genres"] = "4"
+    elif category_name.lower() == "family":
+        params["genres"] = "5"
+    
+    # Fetch content from WatchMode API
+    url = f"{WATCHMODE_BASE_URL}/list-titles/"
+    response = requests.get(url, params=params)
+    
+    if response.status_code == 200:
+        results = response.json().get("titles", [])
+        
+        # Filter content by user's streaming services
+        filtered_content = []
+        for item in results:
+            content_id = item["id"]
+            
+            # Similar filtering logic as in get_discover_categories
+            # But for brevity, we'll simplify here
+            details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
+            details_response = requests.get(details_url)
+            
+            if details_response.status_code == 200:
+                item_details = details_response.json()
+                sources = item_details.get("sources", [])
+                
+                available_on_user_services = any(
+                    str(source.get("source_id")) in user_services 
+                    for source in sources
+                )
+                
+                if available_on_user_services:
+                    # Cache in database
+                    db.content_details.update_one(
+                        {"id": content_id},
+                        {"$set": item_details},
+                        upsert=True
+                    )
+                    
+                    filtered_content.append(item_details)
+            
+            # Limit results to avoid too many API calls
+            if len(filtered_content) >= 20:
+                break
+        
+        return jsonify(filtered_content)
+    else:
+        return jsonify({"error": "Failed to fetch category content"}), 500
 
 # Add content to watchlist
 @app.route("/api/watchlist", methods=["POST"])
@@ -470,62 +803,24 @@ def add_rating():
     
     return jsonify({"message": "Rating added successfully"}), 201
 
-# Get trending content available on user's services
-@app.route("/api/trending", methods=["GET"])
+# Get rating for a specific content
+@app.route("/api/ratings/<content_id>", methods=["GET"])
 @jwt_required()
-def get_trending():
+def get_rating(content_id):
     user_id = get_jwt_identity()
-    user = db.users.find_one({"_id": ObjectId(user_id)})
     
-    if not user or not user.get("streaming_services"):
-        return jsonify({"error": "User streaming services not set"}), 400
+    rating = db.ratings.find_one({
+        "user_id": user_id,
+        "content_id": content_id
+    })
     
-    user_services = user.get("streaming_services", [])
+    if not rating:
+        return jsonify({"error": "Rating not found"}), 404
     
-    # Get trending movies and shows from WatchMode API
-    url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=20"
-    response = requests.get(url)
+    # Convert ObjectId to string for JSON serialization
+    rating["_id"] = str(rating["_id"])
     
-    if response.status_code == 200:
-        trending_items = []
-        trending_results = response.json().get("titles", [])
-        
-        # Check availability on user's services
-        for item in trending_results:
-            content_id = item["id"]
-            sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
-            sources_response = requests.get(sources_url)
-            
-            if sources_response.status_code == 200:
-                sources = sources_response.json()
-                
-                # Check if available on user's services
-                available_on_user_services = any(source["source_id"] in user_services for source in sources)
-                
-                if available_on_user_services:
-                    # Get full details
-                    details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
-                    details_response = requests.get(details_url)
-                    
-                    if details_response.status_code == 200:
-                        item_details = details_response.json()
-                        item_details["sources"] = sources
-                        trending_items.append(item_details)
-                        
-                        # Cache in database
-                        db.content_details.update_one(
-                            {"id": content_id},
-                            {"$set": item_details},
-                            upsert=True
-                        )
-            
-            # Stop once we have enough items
-            if len(trending_items) >= 10:
-                break
-        
-        return jsonify(trending_items)
-    else:
-        return jsonify({"error": "Failed to fetch trending content"}), 500
+    return jsonify(rating)
 
 # Get current user information
 @app.route("/api/user", methods=["GET"])

@@ -20,11 +20,37 @@ apiClient.interceptors.request.use(config => {
   return config;
 });
 
+// Enhanced error handling wrapper
+const handleApiRequest = async (apiCall) => {
+  try {
+    const response = await apiCall();
+    return response;
+  } catch (error) {
+    console.error('API request failed:', error.message);
+    
+    // Provide more detailed error information
+    if (error.response) {
+      console.error('Error response:', {
+        status: error.response.status,
+        data: error.response.data
+      });
+    } else if (error.request) {
+      console.error('No response received from server');
+    }
+    
+    // Return a standardized error response instead of throwing
+    return {
+      data: [],
+      error: error.message
+    };
+  }
+};
+
 // API service methods
 const ApiService = {
   // Test connection
   testConnection: () => {
-    return apiClient.get('/status');
+    return handleApiRequest(() => apiClient.get('/status'));
   },
   
   // Authentication
@@ -38,62 +64,75 @@ const ApiService = {
   
   // Streaming services
   getStreamingServices: () => {
-    return apiClient.get('/streaming_services');
+    return handleApiRequest(() => apiClient.get('/streaming_services'));
   },
   
   updateUserStreamingServices: (services) => {
-    return apiClient.put('/user/streaming_services', { streaming_services: services });
+    return handleApiRequest(() => apiClient.put('/user/streaming_services', { streaming_services: services }));
   },
   
   getUserStreamingServices: () => {
-    return apiClient.get('/user/streaming_services');
+    return handleApiRequest(() => apiClient.get('/user/streaming_services'));
   },
   
-  // Content
+  // Content - all using WatchMode API
   searchContent: (query) => {
-    return apiClient.get(`/search?query=${encodeURIComponent(query)}`);
+    return handleApiRequest(() => apiClient.get(`/search?query=${encodeURIComponent(query)}`));
   },
   
   getContentDetails: (contentId) => {
-    return apiClient.get(`/content/${contentId}`);
+    return handleApiRequest(() => apiClient.get(`/content/${contentId}`));
   },
   
-  // Recommendations
+  // Recommendations from WatchMode API
   getRecommendations: () => {
-    return apiClient.get('/recommendations');
+    return handleApiRequest(() => apiClient.get('/recommendations'));
   },
   
   // Watchlist
   getWatchlist: () => {
-    return apiClient.get('/watchlist');
+    return handleApiRequest(() => apiClient.get('/watchlist'));
   },
   
   addToWatchlist: (contentId) => {
-    return apiClient.post('/watchlist', { content_id: contentId });
+    return handleApiRequest(() => apiClient.post('/watchlist', { content_id: contentId }));
   },
   
   // Ratings
   addRating: (contentId, rating, review = '') => {
-    return apiClient.post('/ratings', { 
+    return handleApiRequest(() => apiClient.post('/ratings', { 
       content_id: contentId, 
       rating, 
       review 
-    });
+    }));
   },
   
-  // Trending
+  getRating: (contentId) => {
+    return handleApiRequest(() => apiClient.get(`/ratings/${contentId}`));
+  },
+  
+  // Trending from WatchMode API
   getTrending: () => {
-    return apiClient.get('/trending');
+    return handleApiRequest(() => apiClient.get('/trending'));
+  },
+  
+  // Discover content from WatchMode API
+  getDiscoverCategories: () => {
+    return handleApiRequest(() => apiClient.get('/discover/categories'));
+  },
+  
+  getContentByCategory: (category) => {
+    return handleApiRequest(() => apiClient.get(`/discover/category/${category}`));
   },
   
   // User preferences
   updateUserPreferences: (preferences) => {
-    return apiClient.put('/user/preferences', { preferences });
+    return handleApiRequest(() => apiClient.put('/user/preferences', { preferences }));
   },
   
   // Get current user data
   getCurrentUser: () => {
-    return apiClient.get('/user');
+    return handleApiRequest(() => apiClient.get('/user'));
   }
 };
 

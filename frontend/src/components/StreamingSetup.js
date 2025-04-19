@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import '../styles/streaming.css';
 
-function StreamingSetup({ user, setUser }) {
+function StreamingSetup({ user, setUser, isInitialSetup, clearInitialSetup }) {
   const [streamingServices, setStreamingServices] = useState([]);
   const [selectedServices, setSelectedServices] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -54,6 +54,11 @@ function StreamingSetup({ user, setUser }) {
       setUser(updatedUser);
       localStorage.setItem('user', JSON.stringify(updatedUser));
       
+      // Clear initial setup flag if needed
+      if (isInitialSetup) {
+        clearInitialSetup();
+      }
+      
       // Navigate to home page after successful update
       navigate('/');
     } catch (error) {
@@ -72,8 +77,15 @@ function StreamingSetup({ user, setUser }) {
   }
 
   return (
-    <div className="container">
+    <div className={`container ${isInitialSetup ? 'initial-setup' : ''}`}>
       <div className="streaming-setup">
+        {isInitialSetup && (
+          <div className="welcome-header">
+            <h1>Welcome to Watchr!</h1>
+            <p>Let's get you set up with your streaming services</p>
+          </div>
+        )}
+      
         <h2>Select Your Streaming Services</h2>
         <p>Choose the streaming services you currently subscribe to:</p>
         
@@ -97,7 +109,7 @@ function StreamingSetup({ user, setUser }) {
           </div>
           
           <button type="submit" className="btn btn-primary">
-            Save Preferences
+            {isInitialSetup ? "Let's Go!" : "Save Preferences"}
           </button>
         </form>
       </div>
