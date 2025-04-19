@@ -60,7 +60,6 @@ function App() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
   const [apiConnected, setApiConnected] = useState(false);
-  const [needsSetup, setNeedsSetup] = useState(false);
   const [isInitialSetup, setIsInitialSetup] = useState(false);
 
   useEffect(() => {
@@ -77,44 +76,41 @@ function App() {
           setApiConnected(false);
         })
         .finally(() => {
-          // Ensure loading state is updated even if connection fails
           const token = localStorage.getItem('token');
           const userInfo = localStorage.getItem('user');
           
           if (token && userInfo) {
-            // First set user from localStorage
-            setIsAuthenticated(true);
-            const userData = JSON.parse(userInfo);
-            setUser(userData);
-            
-            // Check if user needs to set up streaming services
-            if (!userData.streaming_services || userData.streaming_services.length === 0) {
-              setNeedsSetup(true);
+            try {
+              if (typeof userInfo === 'string' && userInfo.trim()) {
+                const userData = JSON.parse(userInfo);
+                if (userData) {
+                  setIsAuthenticated(true);
+                  setUser(userData);
+                  
+                  // Then fetch the latest user data including preferences
+                  ApiService.getCurrentUser()
+                    .then(response => {
+                      if (response && response.data && response.data.user) {
+                        const freshUserData = response.data.user;
+                        setUser(freshUserData);
+                        localStorage.setItem('user', JSON.stringify(freshUserData));
+                      }
+                    })
+                    .catch(error => {
+                      console.error('Error fetching user data:', error);
+                      if (error.response?.status === 401) {
+                        logout();
+                      }
+                    });
+                }
+              } else {
+                logout();
+              }
+            } catch (error) {
+              console.error('Error parsing user data:', error);
+              logout();
             }
-            
-            // Then fetch the latest user data including preferences
-            ApiService.getCurrentUser()
-              .then(response => {
-                const userData = response.data.user;
-                setUser(userData);
-                localStorage.setItem('user', JSON.stringify(userData));
-                
-                // Update needs setup flag based on fresh data
-                if (!userData.streaming_services || userData.streaming_services.length === 0) {
-                  setNeedsSetup(true);
-                } else {
-                  setNeedsSetup(false);
-                }
-              })
-              .catch(error => {
-                console.error('Error fetching user data:', error);
-                if (error.response && error.response.status === 401) {
-                  // Token expired or invalid, log out
-                  logout();
-                }
-              });
           }
-          
           setLoading(false);
         });
     });
@@ -125,16 +121,8 @@ function App() {
     localStorage.setItem('user', JSON.stringify(userData));
     setIsAuthenticated(true);
     setUser(userData);
-    
-    // Check if the user needs to set up streaming services
-    if (!userData.streaming_services || userData.streaming_services.length === 0) {
-      setNeedsSetup(true);
-    } else {
-      setNeedsSetup(false);
-    }
   };
 
-  // Function to handle post-registration flow
   const handleRegistration = (token, userData) => {
     login(token, userData);
     setIsInitialSetup(true);  // Mark as initial setup
@@ -147,11 +135,8 @@ function App() {
     setUser(null);
   };
 
-  // We can't use hooks like useLocation directly in App since it's outside the Router
-  // We'll create a wrapper component to handle the navbar visibility
   const AppContent = () => {
     const location = useLocation();
-    
     return (
       <div className="app">
         {!apiConnected && 

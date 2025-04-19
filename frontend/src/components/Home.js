@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import ApiService from './ApiService';
 import '../styles/home.css';
 
-function Home({ user, needsSetup }) {
+function Home({ user }) {  // Remove needsSetup from props
   const [recommendations, setRecommendations] = useState([]);
   const [trending, setTrending] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -45,7 +45,8 @@ function Home({ user, needsSetup }) {
     fetchData();
   }, [user]);
 
-  // Function to add movie to watchlist
+  // Keep addToWatchlist for future use
+  // eslint-disable-next-line no-unused-vars
   const addToWatchlist = async (contentId) => {
     try {
       const response = await ApiService.addToWatchlist(contentId);
@@ -71,7 +72,7 @@ function Home({ user, needsSetup }) {
     );
   }
 
-  const hasNoContent = recommendations.length === 0 && trending.length === 0;
+  // Remove hasNoContent variable since it's not being used
 
   // Helper function to get the best available image URL
   const getImageUrl = (item) => {
