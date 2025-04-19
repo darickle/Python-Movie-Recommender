@@ -3,11 +3,12 @@ import { Link } from 'react-router-dom';
 import ApiService from './ApiService';
 import '../styles/home.css';
 
-function Home({ user }) {  // Remove needsSetup from props
+function Home({ user }) {
   const [recommendations, setRecommendations] = useState([]);
   const [trending, setTrending] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -19,34 +20,49 @@ function Home({ user }) {  // Remove needsSetup from props
           ApiService.getTrending()
         ]);
 
-        console.log('Home: Recommendations response:', recommendationsResponse.data);
-        console.log('Home: Trending response:', trendingResponse.data);
+        console.log('Recommendations response:', recommendationsResponse);
+        console.log('Trending response:', trendingResponse);
 
-        // Check for error property in response
-        if (recommendationsResponse.error) {
-          console.error('Error fetching recommendations:', recommendationsResponse.error);
-        } else {
-          setRecommendations(recommendationsResponse.data || []);
+        // Check for data property
+        if (recommendationsResponse.data) {
+          setRecommendations(recommendationsResponse.data);
+        } else if (recommendationsResponse.error) {
+          console.error('Recommendations error:', recommendationsResponse.error);
         }
 
-        if (trendingResponse.error) {
-          console.error('Error fetching trending:', trendingResponse.error);
-        } else {
-          setTrending(trendingResponse.data || []);
+        if (trendingResponse.data) {
+          setTrending(trendingResponse.data);
+        } else if (trendingResponse.error) {
+          console.error('Trending error:', trendingResponse.error);
         }
+
       } catch (err) {
         console.error('Error fetching home data:', err);
-        setError('Failed to load content. Please try again later.');
+        
+        // Implement retry logic for network errors
+        if (retryCount < 3) {
+          console.log(`Retrying fetch... Attempt ${retryCount + 1}`);
+          setRetryCount(prevCount => prevCount + 1);
+          // We'll retry in the next useEffect cycle
+        } else {
+          setError('Failed to load content. Please check your network connection and try again later.');
+        }
       } finally {
         setLoading(false);
       }
     };
 
-    fetchData();
-  }, [user]);
+    if (user) {
+      fetchData();
+    }
+  }, [user, retryCount]); // Add retryCount to dependencies for retry logic
 
-  // Keep addToWatchlist for future use
-  // eslint-disable-next-line no-unused-vars
+  // Function to handle manual refresh
+  const handleRefresh = () => {
+    setRetryCount(0); // Reset retry count to trigger a refresh
+    setError(''); // Clear any previous errors
+  };
+
   const addToWatchlist = async (contentId) => {
     try {
       const response = await ApiService.addToWatchlist(contentId);
@@ -62,48 +78,41 @@ function Home({ user }) {  // Remove needsSetup from props
     }
   };
 
-  if (loading) return <div className="loading-container">Loading...</div>;
+  if (loading) {
+    return (
+      <div className="loading-container">
+        <div className="loading-spinner"></div>
+        <p>Loading your personalized content...</p>
+      </div>
+    );
+  }
   
   if (error) {
     return (
-      <div className="error-message">
+      <div className="error-container">
+        <h3>Oops! Something went wrong</h3>
         <p>{error}</p>
+        <button className="btn btn-primary" onClick={handleRefresh}>
+          Try Again
+        </button>
       </div>
     );
   }
 
-  // Remove hasNoContent variable since it's not being used
+  // Check if user has no streaming services configured
+  const hasNoStreamingServices = !user?.streaming_services || user.streaming_services.length === 0;
 
-  // Helper function to get the best available image URL
-  const getImageUrl = (item) => {
-    // Try different possible image URL properties
-    const possibleUrls = [
-      item.poster_url,
-      item.poster_path,
-      item.poster,
-      item.backdrop_url,
-      item.backdrop_path,
-      item.backdrop
-    ];
-    
-    // Find the first non-null, non-empty URL
-    const validUrl = possibleUrls.find(url => url && url.trim() !== '');
-    
-    // Return fallback image if no valid URL found
-    return validUrl || 'https://via.placeholder.com/300x450?text=No+Image';
-  };
-
-  // Helper function to render consistent content cards with WatchMode data
+  // Helper function to render consistent content cards
   const renderContentCard = (item) => {
     if (!item || !item.id) {
       console.warn('Invalid content item:', item);
       return null;
     }
     
-    const title = item.title || item.name || 'Unknown Title';
-    const posterUrl = getImageUrl(item);
-    const year = item.year || item.release_year || '';
-    
+    const title = item.title || 'Unknown Title';
+    const posterUrl = item.poster_url || 'https://via.placeholder.com/300x450?text=No+Image';
+    const year = item.year || '';
+
     return (
       <div key={item.id} className="content-card">
         <Link to={`/movie/${item.id}`}>
@@ -112,7 +121,7 @@ function Home({ user }) {  // Remove needsSetup from props
               src={posterUrl}
               alt={title}
               onError={(e) => {
-                e.target.onerror = null; // Prevent infinite loop
+                e.target.onerror = null;
                 e.target.src = 'https://via.placeholder.com/300x450?text=No+Image';
               }}
             />
@@ -122,6 +131,13 @@ function Home({ user }) {  // Remove needsSetup from props
             {year && <p>{year}</p>}
           </div>
         </Link>
+        <button 
+          className="btn btn-small btn-outline watchlist-btn"
+          onClick={() => addToWatchlist(item.id)}
+          aria-label={`Add ${title} to watchlist`}
+        >
+          + Watchlist
+        </button>
       </div>
     );
   };
@@ -131,27 +147,37 @@ function Home({ user }) {  // Remove needsSetup from props
       <div className="container">
         <div className="home">
           
-          <section className="recommendations">
-            <h2>Recommended For You</h2>
-            {recommendations.length === 0 ? (
-              <div className="empty-state">
-                <p>Rate some movies to get personalized recommendations!</p>
-                <Link to="/discover" className="btn btn-primary">Discover Movies</Link>
-              </div>
-            ) : (
-              <div className="content-grid">
-                {recommendations.map(renderContentCard)}
-              </div>
-            )}
-          </section>
+          {hasNoStreamingServices ? (
+            <div className="home-no-services">
+              <h2>Welcome to Watchr!</h2>
+              <p>Start by setting up your streaming services to get personalized recommendations.</p>
+              <Link to="/setup" className="btn btn-primary">Set Up Streaming Services</Link>
+            </div>
+          ) : (
+            <>
+              <section className="recommendations">
+                <h2>Recommended For You</h2>
+                {recommendations.length === 0 ? (
+                  <div className="empty-state">
+                    <p>Rate some movies to get personalized recommendations!</p>
+                    <Link to="/discover" className="btn btn-primary">Discover Movies</Link>
+                  </div>
+                ) : (
+                  <div className="content-grid">
+                    {recommendations.map(renderContentCard)}
+                  </div>
+                )}
+              </section>
 
-          {trending.length > 0 && (
-            <section className="trending">
-              <h2>Trending Now</h2>
-              <div className="content-grid">
-                {trending.map(renderContentCard)}
-              </div>
-            </section>
+              {trending.length > 0 && (
+                <section className="trending">
+                  <h2>Trending Now</h2>
+                  <div className="content-grid">
+                    {trending.map(renderContentCard)}
+                  </div>
+                </section>
+              )}
+            </>
           )}
         </div>
       </div>

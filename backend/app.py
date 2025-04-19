@@ -1,6 +1,8 @@
 from flask import Flask, request, jsonify
-import requests
+import http.client
+import json
 import os
+import ssl  # Import ssl module
 from flask_cors import CORS
 from bson.objectid import ObjectId
 import pandas as pd
@@ -13,6 +15,17 @@ from pymongo.server_api import ServerApi
 import bcrypt  # Add bcrypt for password hashing
 import certifi
 from functools import wraps
+import random
+
+# Create a custom SSL context that doesn't verify certificates
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+# Disable SSL certificate verification for the entire application
+# This is not recommended for production, but can help in development
+import urllib3
+urllib3.disable_warnings()
 
 app = Flask(__name__)
 # Update CORS configuration to properly handle preflight requests
@@ -68,9 +81,60 @@ def validate_request_data(required_fields):
         return wrapper
     return decorator
 
-# WatchMode API configuration
-WATCHMODE_API_KEY = config.WATCHMODE_API_KEY
-WATCHMODE_BASE_URL = "https://api.watchmode.com/v1"
+# RapidAPI configuration
+RAPIDAPI_KEY = config.RAPIDAPI_KEY
+RAPIDAPI_HOST = config.RAPIDAPI_HOST
+
+# Service ID mapping between our system and RapidAPI
+SERVICE_MAPPING = {
+    "203": "netflix",  # Netflix
+    "26": "prime",     # Amazon Prime
+    "372": "disney",   # Disney+
+    "157": "hulu",     # Hulu
+    "387": "hbo",      # HBO Max
+    "444": "paramount", # Paramount+
+    "389": "peacock",   # Peacock
+    "371": "apple",     # Apple TV+
+    "442": "discovery", # Discovery+
+    "443": "espn"       # ESPN+
+}
+
+REVERSE_SERVICE_MAPPING = {v: k for k, v in SERVICE_MAPPING.items()}
+
+# Helper function to create an HTTP connection with SSL context
+def create_api_connection():
+    return http.client.HTTPSConnection(
+        RAPIDAPI_HOST,
+        context=ssl_context  # Use our custom SSL context
+    )
+
+# Helper function for API requests with retry mechanism
+def make_api_request(path, max_retries=3):
+    retries = 0
+    while retries < max_retries:
+        try:
+            conn = create_api_connection()
+            headers = {
+                'x-rapidapi-key': RAPIDAPI_KEY,
+                'x-rapidapi-host': RAPIDAPI_HOST
+            }
+            conn.request("GET", path, headers=headers)
+            response = conn.getresponse()
+            data = response.read().decode('utf-8')
+            return json.loads(data)
+        except Exception as e:
+            print(f"API request failed (attempt {retries+1}/{max_retries}): {str(e)}")
+            retries += 1
+            if retries < max_retries:
+                # Exponential backoff: wait longer between each retry
+                import time
+                time.sleep(2 ** retries)
+        finally:
+            try:
+                conn.close()
+            except:
+                pass
+    return {}
 
 # Get list of available streaming services
 @app.route("/api/streaming_services", methods=["GET"])
@@ -191,12 +255,23 @@ def update_streaming_services():
         if result.matched_count == 0:
             return jsonify({"error": "User not found"}), 404
             
-        # Refresh content for the updated services
-        from utils.streaming_services import StreamingService
-        StreamingService.refresh_content_for_services(data["streaming_services"])
-            
+        # Import StreamingService here to avoid cyclic imports
+        try:
+            from backend.utils.streaming_services import StreamingService
+            StreamingService.refresh_content_for_services(data["streaming_services"])
+        except ImportError:
+            # Try relative import if the above fails
+            try:
+                from utils.streaming_services import StreamingService
+                StreamingService.refresh_content_for_services(data["streaming_services"])
+            except ImportError:
+                # If both fail, try importing from the root level
+                from streaming_services import StreamingService
+                StreamingService.refresh_content_for_services(data["streaming_services"])
+                
         return jsonify({"message": "Streaming services updated successfully"}), 200
     except Exception as e:
+        print(f"Failed to update streaming services: {str(e)}")
         return jsonify({"error": f"Failed to update streaming services: {str(e)}"}), 500
 
 # Update user preferences
@@ -233,7 +308,7 @@ def api_status():
 def handle_options(path):
     return '', 200
 
-# Search for content
+# Search for content using RapidAPI
 @app.route("/api/search", methods=["GET"])
 def search_content():
     query = request.args.get("query", "")
@@ -241,23 +316,58 @@ def search_content():
     if not query:
         return jsonify({"error": "Query parameter is required"}), 400
     
-    url = f"{WATCHMODE_BASE_URL}/search/?apiKey={WATCHMODE_API_KEY}&search_field=name&search_value={query}"
-    response = requests.get(url)
+    try:
+        conn = create_api_connection()  # Use helper function
+        
+        headers = {
+            'x-rapidapi-key': RAPIDAPI_KEY,
+            'x-rapidapi-host': RAPIDAPI_HOST
+        }
+        
+        # Make API request to search endpoint
+        req_path = f"/search/title?title={query}&country=us&show_type=all&output_language=en"
+        conn.request("GET", req_path, headers=headers)
+        
+        res = conn.getresponse()
+        data = res.read().decode('utf-8')
+        
+        try:
+            content_data = json.loads(data)
+            
+            if "result" in content_data:
+                results = content_data["result"]
+                
+                # Transform to match expected format
+                transformed_results = []
+                for item in results:
+                    transformed_item = {
+                        "id": item.get("imdbId"),
+                        "title": item.get("title", ""),
+                        "year": item.get("year", ""),
+                        "poster_url": (item.get("posterURLs", {}).get("original") or 
+                                      item.get("posterURLs", {}).get("500", "")),
+                        "content_type": "movie" if item.get("type") == "movie" else "show"
+                    }
+                    transformed_results.append(transformed_item)
+                    
+                    # Cache results in database
+                    db.content.update_one(
+                        {"id": transformed_item["id"]},
+                        {"$set": transformed_item},
+                        upsert=True
+                    )
+                
+                return jsonify(transformed_results)
+            else:
+                return jsonify([])
+                
+        except Exception as e:
+            print(f"Error parsing search results: {str(e)}")
+            return jsonify({"error": f"Failed to parse search results: {str(e)}"}), 500
     
-    if response.status_code == 200:
-        results = response.json().get("title_results", [])
-        
-        # Cache results in database
-        for item in results:
-            db.content.update_one(
-                {"id": item["id"]},
-                {"$set": item},
-                upsert=True
-            )
-        
-        return jsonify(results)
-    else:
-        return jsonify({"error": "Failed to search content"}), 500
+    except Exception as e:
+        print(f"Error searching content: {str(e)}")
+        return jsonify({"error": f"Failed to search content: {str(e)}"}), 500
 
 # Get content details with streaming availability
 @app.route("/api/content/<content_id>", methods=["GET"])
@@ -271,7 +381,7 @@ def get_content_details(content_id):
     cached_content = db.content_details.find_one({"id": content_id})
     
     # If cached, return cached data
-    if cached_content:
+    if cached_content and cached_content.get("details_cached"):
         # Ensure we only include sources available on user's services if they have any
         if user_services and "sources" in cached_content:
             filtered_sources = [
@@ -282,42 +392,76 @@ def get_content_details(content_id):
         
         return jsonify(cached_content)
     
-    # Fetch details from WatchMode API
-    url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
-    response = requests.get(url)
+    # Determine content type for API request
+    content_type_check = db.content.find_one({"id": content_id})
+    content_type = "movie" if content_type_check and content_type_check.get("content_type") == "movie" else "series"
     
-    if response.status_code == 200:
-        content_details = response.json()
+    try:
+        # Fetch from RapidAPI
+        conn = create_api_connection()  # Use helper function
         
-        # Fetch sources separately
-        sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
-        sources_response = requests.get(sources_url)
+        headers = {
+            'x-rapidapi-key': RAPIDAPI_KEY,
+            'x-rapidapi-host': RAPIDAPI_HOST
+        }
         
-        if sources_response.status_code == 200:
-            sources = sources_response.json()
+        # Make API request
+        req_path = f"/get/{content_type}/id/{content_id}?country=us"
+        conn.request("GET", req_path, headers=headers)
+        
+        res = conn.getresponse()
+        data = res.read().decode('utf-8')
+        
+        try:
+            content_data = json.loads(data)
             
-            # Filter sources to only include those on user's services
-            if user_services:
-                filtered_sources = [
-                    source for source in sources
-                    if str(source.get("source_id", "")) in user_services
-                ]
-                content_details["sources"] = filtered_sources
-            else:
-                content_details["sources"] = sources
-        else:
-            content_details["sources"] = []
-        
-        # Cache in database
-        db.content_details.update_one(
-            {"id": content_id},
-            {"$set": content_details},
-            upsert=True
-        )
-        
-        return jsonify(content_details)
-    else:
-        return jsonify({"error": "Failed to fetch content details"}), 500
+            # Transform to match expected format
+            transformed_details = {
+                "id": content_id,
+                "title": content_data.get("title", ""),
+                "year": content_data.get("year", ""),
+                "runtime_minutes": content_data.get("runtime", 0),
+                "us_rating": content_data.get("rating", "Not Rated"),
+                "poster_url": (content_data.get("posterURLs", {}).get("original") or 
+                              content_data.get("posterURLs", {}).get("500", "")),
+                "plot_overview": content_data.get("overview", ""),
+                "genre_names": [genre.get("name", "") for genre in content_data.get("genres", [])],
+                "cast": [cast.get("name", "") for cast in content_data.get("cast", [])],
+                "directors": [director.get("name", "") for director in content_data.get("directors", [])],
+                "sources": [],
+                "details_cached": True,
+                "content_type": content_type
+            }
+            
+            # Process streaming info
+            streaming_info = content_data.get("streamingInfo", {}).get("us", {})
+            for provider, info in streaming_info.items():
+                source_id = REVERSE_SERVICE_MAPPING.get(provider, "")
+                if source_id and (not user_services or source_id in user_services):
+                    for stream_option in info:
+                        transformed_details["sources"].append({
+                            "source_id": source_id,
+                            "name": provider,
+                            "type": stream_option.get("type", ""),
+                            "web_url": stream_option.get("link", "")
+                        })
+            
+            # Cache in database
+            db.content_details.update_one(
+                {"id": content_id},
+                {"$set": transformed_details},
+                upsert=True
+            )
+            
+            return jsonify(transformed_details)
+            
+        except Exception as e:
+            print(f"Error parsing content details: {str(e)}")
+            return jsonify({"error": f"Failed to parse content details: {str(e)}"}), 500
+    
+    except Exception as e:
+        print(f"Error fetching content details: {str(e)}")
+        return jsonify({"error": f"Failed to fetch content details: {str(e)}"}), 500
 
 # Helper function to check if content is available on user's streaming services
 def is_available_on_user_services(sources, user_services):
@@ -342,7 +486,7 @@ def get_recommendations():
     
     if not user:
         return jsonify({"error": "User not found"}), 404
-        
+    
     if not user.get("streaming_services"):
         return jsonify([]), 200  # Return empty list if no streaming services
     
@@ -350,129 +494,105 @@ def get_recommendations():
     user_services = user.get("streaming_services", [])
     print(f"User streaming services: {user_services}")
     
-    # Fetch content for these services
-    recommended_content = []
-    
-    # Get user's watch history and ratings if available
-    user_ratings = list(db.ratings.find({"user_id": user_id}))
-    
-    # If user has ratings, use them for content-based recommendations
-    if user_ratings:
-        # Get content details for items user has rated highly
-        liked_content = []
-        for rating in user_ratings:
-            if rating["rating"] >= 4:  # 4 or 5 star ratings
-                content = db.content_details.find_one({"id": rating["content_id"]})
-                if content:
-                    liked_content.append(content)
-        
-        # Generate recommendations based on content similarity
-        if liked_content:
-            # Create a simplified content representation for similarity calculation
-            content_data = []
-            for item in liked_content:
-                # Create a string of features for TF-IDF
-                features = f"{item.get('title', '')} {' '.join(item.get('genre_names', []))}"
-                content_data.append({
-                    "id": item["id"],
-                    "features": features
-                })
-            
-            # Convert to DataFrame for processing
-            df = pd.DataFrame(content_data)
-            
-            if not df.empty and 'features' in df.columns:
-                # Create TF-IDF vectors
-                tfidf = TfidfVectorizer(stop_words='english')
-                try:
-                    tfidf_matrix = tfidf.fit_transform(df['features'])
-                    
-                    # Calculate cosine similarity
-                    cosine_sim = cosine_similarity(tfidf_matrix, tfidf_matrix)
-                    
-                    # Get indices of items user has liked
-                    indices = df.index.tolist()
-                    
-                    # Get similar items
-                    similar_items = []
-                    for idx in indices:
-                        similar_indices = cosine_sim[idx].argsort()[:-6:-1]  # Top 5 similar items
-                        similar_items.extend([df.iloc[i]["id"] for i in similar_indices if i != idx])
-                    
-                    # Remove duplicates
-                    similar_items = list(set(similar_items))
-                    
-                    # Fetch details for these items
-                    for item_id in similar_items:
-                        content = db.content_details.find_one({"id": item_id})
-                        if content:
-                            # Check if available on user's streaming services
-                            sources = content.get("sources", [])
-                            if is_available_on_user_services(sources, user_services):
-                                recommended_content.append(content)
-                except Exception as e:
-                    app.logger.error(f"Error in TF-IDF processing: {str(e)}")
-    
-    # If we don't have enough recommendations yet, get popular content from user's services
-    if len(recommended_content) < 10:
+    try:
+        # Try to get the streaming service utility
         try:
-            # Get popular movies and shows available on user's streaming services
-            url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=30"
-            response = requests.get(url)
+            from backend.utils.streaming_services import StreamingService
+        except ImportError:
+            try:
+                from utils.streaming_services import StreamingService
+            except ImportError:
+                from streaming_services import StreamingService
+        
+        # Try to get content from cache first
+        cached_content = StreamingService.get_content_for_services(user_services, limit=20)
+        
+        if cached_content and len(cached_content) >= 10:
+            print(f"Using {len(cached_content)} cached items for recommendations")
+            return jsonify(cached_content)
+        
+        # If not enough cached content, make API requests
+        # Convert our service IDs to RapidAPI service names
+        rapidapi_services = []
+        for service_id in user_services:
+            if service_id in SERVICE_MAPPING:
+                rapidapi_services.append(SERVICE_MAPPING[service_id])
+        
+        # If no valid services, return empty list
+        if not rapidapi_services:
+            return jsonify([]), 200
+        
+        # Choose a random service
+        selected_service = random.choice(rapidapi_services)
+        
+        # Get user genre preferences if available
+        genres = []
+        if user.get("preferences") and user["preferences"].get("genres"):
+            genres = user["preferences"]["genres"]
+        
+        # If we have genre preferences, use them
+        genre_query = ""
+        if genres:
+            # Randomly select one genre from user preferences
+            selected_genre = random.choice(genres).lower().replace(" ", "-")
+            genre_query = f"&genre={selected_genre}"
+        
+        # Make API request for movies
+        req_path = f"/search/basic?country=us&service={selected_service}&type=movie{genre_query}&page=1&language=en&sort_by=popularity"
+        movie_data = make_api_request(req_path)
+        recommended_movies = movie_data.get("results", [])
+        
+        # Make API request for TV shows
+        req_path = f"/search/basic?country=us&service={selected_service}&type=series{genre_query}&page=1&language=en&sort_by=popularity"
+        show_data = make_api_request(req_path)
+        recommended_shows = show_data.get("results", [])
+        
+        # Combine and shuffle recommendations
+        recommended_content = recommended_movies + recommended_shows
+        random.shuffle(recommended_content)
+        
+        # Transform to match expected format
+        transformed_recommendations = []
+        for item in recommended_content[:20]:
+            transformed_item = {
+                "id": item.get("imdbId"),
+                "title": item.get("title", ""),
+                "year": item.get("year", ""),
+                "runtime_minutes": item.get("runtime", 0),
+                "us_rating": item.get("rating", "Not Rated"),
+                "poster_url": (item.get("posterURLs", {}).get("original") or 
+                              item.get("posterURLs", {}).get("500", "")),
+                "plot_overview": item.get("overview", ""),
+                "content_type": "movie" if item.get("type") == "movie" else "show"
+            }
+            transformed_recommendations.append(transformed_item)
             
-            if response.status_code == 200:
-                popular_content = response.json().get("titles", [])
-                
-                # For each item, check streaming availability
-                for item in popular_content:
-                    content_id = item["id"]
-                    
-                    # First check the cache
-                    cached_content = db.content_details.find_one({"id": content_id})
-                    
-                    if cached_content and "sources" in cached_content:
-                        # Use cached sources
-                        sources = cached_content.get("sources", [])
-                        if is_available_on_user_services(sources, user_services):
-                            recommended_content.append(cached_content)
-                    else:
-                        # Fetch from API
-                        details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
-                        details_response = requests.get(details_url)
-                        
-                        if details_response.status_code == 200:
-                            content_details = details_response.json()
-                            
-                            # Add sources if not included in details
-                            if "sources" not in content_details:
-                                sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
-                                sources_response = requests.get(sources_url)
-                                if sources_response.status_code == 200:
-                                    content_details["sources"] = sources_response.json()
-                            
-                            # Check if available on user's streaming services
-                            if is_available_on_user_services(content_details.get("sources", []), user_services):
-                                # Cache in database with sources
-                                db.content_details.update_one(
-                                    {"id": content_id},
-                                    {"$set": content_details},
-                                    upsert=True
-                                )
-                                
-                                recommended_content.append(content_details)
-                    
-                    # Stop once we have enough recommendations
-                    if len(recommended_content) >= 20:
-                        break
-            else:
-                app.logger.error(f"WatchMode API error: {response.status_code} - {response.text}")
-        except Exception as e:
-            app.logger.error(f"Error fetching recommendations: {str(e)}")
-    
-    # Log response for debugging
-    print(f"Returning {len(recommended_content)} recommended content items")
-    
-    return jsonify(recommended_content)
+            # Cache in database for future use
+            db.content.update_one(
+                {"id": transformed_item["id"]},
+                {"$set": transformed_item},
+                upsert=True
+            )
+        
+        return jsonify(transformed_recommendations)
+        
+    except Exception as e:
+        print(f"Error getting recommendations: {str(e)}")
+        
+        # Try to get content from cache as fallback
+        try:
+            fallback_content = list(db.content.find(
+                {},  # No filter, get any content
+                {"_id": 0}
+            ).limit(20))
+            
+            if fallback_content:
+                print(f"Returning {len(fallback_content)} fallback items from cache")
+                return jsonify(fallback_content)
+        except Exception as cache_error:
+            print(f"Error retrieving fallback content: {str(cache_error)}")
+            
+        return jsonify({"error": f"Failed to get recommendations: {str(e)}"}), 500
 
 # Get trending content available on user's services
 @app.route("/api/trending", methods=["GET"])
@@ -490,67 +610,78 @@ def get_trending():
     user_services = user.get("streaming_services", [])
     print(f"User streaming services for trending: {user_services}")
     
-    trending_items = []
+    # Convert our service IDs to RapidAPI service names
+    rapidapi_services = []
+    for service_id in user_services:
+        if service_id in SERVICE_MAPPING:
+            rapidapi_services.append(SERVICE_MAPPING[service_id])
+    
+    # If no valid services, return empty list
+    if not rapidapi_services:
+        return jsonify([]), 200
+    
+    # Choose a random service to get trending content from
+    selected_service = random.choice(rapidapi_services)
     
     try:
-        # Get trending movies and shows from WatchMode API
-        url = f"{WATCHMODE_BASE_URL}/list-titles/?apiKey={WATCHMODE_API_KEY}&types=movie,show&sort_by=popularity_desc&limit=30"
-        response = requests.get(url)
+        # Use our helper function for API requests
+        req_path = f"/search/basic?country=us&service={selected_service}&type=movie&page=1&language=en&sort_by=popularity"
+        movie_data = make_api_request(req_path)
+        trending_movies = movie_data.get("results", [])
         
-        if response.status_code == 200:
-            trending_results = response.json().get("titles", [])
+        req_path = f"/search/basic?country=us&service={selected_service}&type=series&page=1&language=en&sort_by=popularity"
+        show_data = make_api_request(req_path)
+        trending_shows = show_data.get("results", [])
+        
+        # Combine and shuffle trending content
+        trending_content = trending_movies + trending_shows
+        random.shuffle(trending_content)
+        
+        # Transform to match expected format
+        transformed_trending = []
+        for item in trending_content[:10]:
+            transformed_item = {
+                "id": item.get("imdbId"),
+                "title": item.get("title", ""),
+                "year": item.get("year", ""),
+                "runtime_minutes": item.get("runtime", 0),
+                "us_rating": item.get("rating", "Not Rated"),
+                "poster_url": (item.get("posterURLs", {}).get("original") or 
+                              item.get("posterURLs", {}).get("500", "")),
+                "plot_overview": item.get("overview", ""),
+                "content_type": "movie" if item.get("type") == "movie" else "show"
+            }
+            transformed_trending.append(transformed_item)
             
-            # Check availability on user's services
-            for item in trending_results:
-                content_id = item["id"]
-                
-                # First check if we have this cached
-                cached_content = db.content_details.find_one({"id": content_id})
-                
-                if cached_content and "sources" in cached_content:
-                    # Use cached data
-                    sources = cached_content.get("sources", [])
-                    if is_available_on_user_services(sources, user_services):
-                        trending_items.append(cached_content)
-                else:
-                    # Need to fetch sources from API
-                    sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
-                    sources_response = requests.get(sources_url)
-                    
-                    if sources_response.status_code == 200:
-                        sources = sources_response.json()
-                        
-                        # Check if available on user's services
-                        if is_available_on_user_services(sources, user_services):
-                            # Get full details
-                            details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
-                            details_response = requests.get(details_url)
-                            
-                            if details_response.status_code == 200:
-                                item_details = details_response.json()
-                                item_details["sources"] = sources
-                                
-                                # Cache in database
-                                db.content_details.update_one(
-                                    {"id": content_id},
-                                    {"$set": item_details},
-                                    upsert=True
-                                )
-                                
-                                trending_items.append(item_details)
-                
-                # Stop once we have enough items
-                if len(trending_items) >= 10:
-                    break
-        else:
-            app.logger.error(f"WatchMode API error in trending: {response.status_code} - {response.text}")
+            # Cache in database for future use
+            db.content.update_one(
+                {"id": transformed_item["id"]},
+                {"$set": transformed_item},
+                upsert=True
+            )
+        
+        # Log response for debugging
+        print(f"Returning {len(transformed_trending)} trending items")
+        
+        return jsonify(transformed_trending)
+        
     except Exception as e:
-        app.logger.error(f"Error fetching trending content: {str(e)}")
-    
-    # Log response for debugging
-    print(f"Returning {len(trending_items)} trending items")
-    
-    return jsonify(trending_items)
+        print(f"Error getting trending content: {str(e)}")
+        
+        # If we get an error, try to pull from cache as a fallback
+        try:
+            cached_content = list(db.content.find(
+                {"content_type": {"$in": ["movie", "show"]}},
+                {"_id": 0}
+            ).limit(10))
+            
+            if cached_content:
+                print(f"Returning {len(cached_content)} cached items as fallback")
+                return jsonify(cached_content)
+        except Exception as cache_error:
+            print(f"Error retrieving cached content: {str(cache_error)}")
+        
+        return jsonify({"error": f"Failed to get trending content: {str(e)}"}), 500
 
 # API endpoints for the discover page
 @app.route("/api/discover/categories", methods=["GET"])
@@ -565,8 +696,17 @@ def get_discover_categories():
     if not user.get("streaming_services"):
         return jsonify({}), 200  # Return empty object if no streaming services
     
-    user_services = user.get("streaming_services", [])
-    print(f"User streaming services for categories: {user_services}")
+    # Convert service IDs to RapidAPI service names
+    rapidapi_services = []
+    for service_id in user.get("streaming_services", []):
+        if service_id in SERVICE_MAPPING:
+            rapidapi_services.append(SERVICE_MAPPING[service_id])
+    
+    if not rapidapi_services:
+        return jsonify({}), 200  # Return empty object if no valid services
+    
+    # Choose a random service from the user's services
+    selected_service = random.choice(rapidapi_services)
     
     # Prepare content categories
     categories = {
@@ -579,87 +719,89 @@ def get_discover_categories():
     }
     
     try:
-        # Populate each category with content available on user's streaming services
-        for category_name in categories.keys():
-            # Determine query parameters based on category
-            params = {
-                "apiKey": WATCHMODE_API_KEY,
-                "limit": 15,
-                "sort_by": "popularity_desc"
-            }
+        conn = create_api_connection()  # Use helper function
+        
+        headers = {
+            'x-rapidapi-key': RAPIDAPI_KEY,
+            'x-rapidapi-host': RAPIDAPI_HOST
+        }
+        
+        # Get movies for the selected service
+        req_path = f"/search/basic?country=us&service={selected_service}&type=movie&page=1&language=en&sort_by=popularity"
+        conn.request("GET", req_path, headers=headers)
+        res = conn.getresponse()
+        data = res.read().decode('utf-8')
+        content_data = json.loads(data)
+        categories["Movies"] = transform_content_items(content_data.get("results", [])[:10])
+        
+        # Get TV shows for the selected service
+        req_path = f"/search/basic?country=us&service={selected_service}&type=series&page=1&language=en&sort_by=popularity"
+        conn.request("GET", req_path, headers=headers)
+        res = conn.getresponse()
+        data = res.read().decode('utf-8')
+        content_data = json.loads(data)
+        categories["TV Shows"] = transform_content_items(content_data.get("results", [])[:10])
+        
+        # Get content for specific genres
+        genre_mappings = {
+            "Action & Adventure": "action",
+            "Comedy": "comedy",
+            "Drama": "drama",
+            "Family": "family"
+        }
+        
+        for category, genre in genre_mappings.items():
+            # Get movies in this genre
+            req_path = f"/search/basic?country=us&service={selected_service}&type=movie&page=1&language=en&genre={genre}&sort_by=popularity"
+            conn.request("GET", req_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read().decode('utf-8')
+            content_data = json.loads(data)
+            movies = content_data.get("results", [])[:5]
             
-            if category_name == "Movies":
-                params["types"] = "movie"
-            elif category_name == "TV Shows":
-                params["types"] = "show"
-            else:
-                # For genre categories, we need to map category names to genre IDs
-                # This is a simplified approach - in a real app, you'd have a proper mapping
-                genre_mapping = {
-                    "Action & Adventure": "1,2",  # Sample genre IDs
-                    "Comedy": "3",
-                    "Drama": "4",
-                    "Family": "5"
-                }
-                params["genres"] = genre_mapping.get(category_name, "")
+            # Get shows in this genre
+            req_path = f"/search/basic?country=us&service={selected_service}&type=series&page=1&language=en&genre={genre}&sort_by=popularity"
+            conn.request("GET", req_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read().decode('utf-8')
+            content_data = json.loads(data)
+            shows = content_data.get("results", [])[:5]
             
-            # Fetch content from WatchMode API
-            url = f"{WATCHMODE_BASE_URL}/list-titles/"
-            response = requests.get(url, params=params)
-            
-            if response.status_code == 200:
-                results = response.json().get("titles", [])
-                
-                # Filter content by user's streaming services
-                filtered_content = []
-                for item in results[:10]:  # Limit to 10 items per category
-                    content_id = item["id"]
-                    
-                    # Check if we have cached sources data
-                    cached_details = db.content_details.find_one({"id": content_id})
-                    
-                    if cached_details and "sources" in cached_details:
-                        # Use cached data
-                        if is_available_on_user_services(cached_details.get("sources", []), user_services):
-                            filtered_content.append(cached_details)
-                    else:
-                        # Fetch sources from API
-                        sources_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/sources/?apiKey={WATCHMODE_API_KEY}"
-                        sources_response = requests.get(sources_url)
-                        
-                        if sources_response.status_code == 200:
-                            sources = sources_response.json()
-                            
-                            # Check if available on user's streaming services
-                            if is_available_on_user_services(sources, user_services):
-                                # Get full details
-                                details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}"
-                                details_response = requests.get(details_url)
-                                
-                                if details_response.status_code == 200:
-                                    item_details = details_response.json()
-                                    item_details["sources"] = sources
-                                    
-                                    # Cache in database
-                                    db.content_details.update_one(
-                                        {"id": content_id},
-                                        {"$set": item_details},
-                                        upsert=True
-                                    )
-                                    
-                                    filtered_content.append(item_details)
-                
-                categories[category_name] = filtered_content
-            else:
-                app.logger.error(f"WatchMode API error in category {category_name}: {response.status_code} - {response.text}")
+            # Combine movies and shows for this genre
+            combined = movies + shows
+            categories[category] = transform_content_items(combined)
+        
+        return jsonify(categories)
+        
     except Exception as e:
-        app.logger.error(f"Error fetching discover categories: {str(e)}")
+        print(f"Error getting discover categories: {str(e)}")
+        return jsonify({"error": f"Failed to get discover categories: {str(e)}"}), 500
+
+# Helper function to transform content items from RapidAPI format to our format
+def transform_content_items(items):
+    transformed_items = []
+    for item in items:
+        transformed_item = {
+            "id": item.get("imdbId"),
+            "title": item.get("title", ""),
+            "year": item.get("year", ""),
+            "runtime_minutes": item.get("runtime", 0),
+            "us_rating": item.get("rating", "Not Rated"),
+            "poster_url": (item.get("posterURLs", {}).get("original") or 
+                          item.get("posterURLs", {}).get("500", "")),
+            "plot_overview": item.get("overview", ""),
+            "content_type": "movie" if item.get("type") == "movie" else "show"
+        }
+        transformed_items.append(transformed_item)
+        
+        # Cache in database for future use
+        db.content.update_one(
+            {"id": transformed_item["id"]},
+            {"$set": transformed_item},
+            upsert=True
+        )
     
-    # Log response for debugging
-    category_counts = {name: len(items) for name, items in categories.items()}
-    print(f"Returning categories with item counts: {category_counts}")
-    
-    return jsonify(categories)
+    return transformed_items
 
 @app.route("/api/discover/category/<category_name>", methods=["GET"])
 @jwt_required()
@@ -670,72 +812,95 @@ def get_category_content(category_name):
     if not user or not user.get("streaming_services"):
         return jsonify({"error": "User streaming services not set"}), 400
     
-    user_services = user.get("streaming_services", [])
+    # Convert service IDs to RapidAPI service names
+    rapidapi_services = []
+    for service_id in user.get("streaming_services", []):
+        if service_id in SERVICE_MAPPING:
+            rapidapi_services.append(SERVICE_MAPPING[service_id])
     
-    # Determine query parameters based on category
-    params = {
-        "apiKey": WATCHMODE_API_KEY,
-        "limit": 30
-    }
+    if not rapidapi_services:
+        return jsonify({"error": "No valid streaming services configured"}), 400
     
-    # Map category name to appropriate API parameters
-    # This is a simplified approach - in a real app, you'd have a proper mapping system
-    if category_name.lower() == "movies":
-        params["types"] = "movie"
-    elif category_name.lower() in ["tv", "shows", "tv shows"]:
-        params["types"] = "show"
-    elif category_name.lower() in ["action", "adventure", "action & adventure"]:
-        params["genres"] = "1,2"  # Sample genre IDs
-    elif category_name.lower() == "comedy":
-        params["genres"] = "3"
-    elif category_name.lower() == "drama":
-        params["genres"] = "4"
-    elif category_name.lower() == "family":
-        params["genres"] = "5"
+    # Choose a random service from the user's services
+    selected_service = random.choice(rapidapi_services)
     
-    # Fetch content from WatchMode API
-    url = f"{WATCHMODE_BASE_URL}/list-titles/"
-    response = requests.get(url, params=params)
-    
-    if response.status_code == 200:
-        results = response.json().get("titles", [])
+    try:
+        conn = create_api_connection()  # Use helper function
         
-        # Filter content by user's streaming services
-        filtered_content = []
-        for item in results:
-            content_id = item["id"]
-            
-            # Similar filtering logic as in get_discover_categories
-            # But for brevity, we'll simplify here
-            details_url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/?apiKey={WATCHMODE_API_KEY}&append_to_response=sources"
-            details_response = requests.get(details_url)
-            
-            if details_response.status_code == 200:
-                item_details = details_response.json()
-                sources = item_details.get("sources", [])
-                
-                available_on_user_services = any(
-                    str(source.get("source_id")) in user_services 
-                    for source in sources
-                )
-                
-                if available_on_user_services:
-                    # Cache in database
-                    db.content_details.update_one(
-                        {"id": content_id},
-                        {"$set": item_details},
-                        upsert=True
-                    )
-                    
-                    filtered_content.append(item_details)
-            
-            # Limit results to avoid too many API calls
-            if len(filtered_content) >= 20:
-                break
+        headers = {
+            'x-rapidapi-key': RAPIDAPI_KEY,
+            'x-rapidapi-host': RAPIDAPI_HOST
+        }
         
-        return jsonify(filtered_content)
-    else:
-        return jsonify({"error": "Failed to fetch category content"}), 500
+        content_type = None
+        genre = None
+        
+        # Map category name to the appropriate parameters
+        if category_name.lower() == "movies":
+            content_type = "movie"
+        elif category_name.lower() in ["tv", "tv shows", "shows"]:
+            content_type = "series"
+        else:
+            # Try to map category to a genre
+            genre_mappings = {
+                "action & adventure": "action",
+                "action": "action",
+                "adventure": "adventure",
+                "comedy": "comedy",
+                "drama": "drama",
+                "family": "family",
+                "sci-fi": "sci-fi",
+                "thriller": "thriller",
+                "horror": "horror",
+                "romance": "romance",
+                "documentary": "documentary",
+                "animation": "animation"
+            }
+            genre = genre_mappings.get(category_name.lower())
+            
+            if not genre:
+                return jsonify({"error": f"Unknown category: {category_name}"}), 400
+        
+        results = []
+        
+        # If we have a specific content type (movie or series)
+        if content_type:
+            req_path = f"/search/basic?country=us&service={selected_service}&type={content_type}&page=1&language=en&sort_by=popularity"
+            conn.request("GET", req_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read().decode('utf-8')
+            content_data = json.loads(data)
+            results = content_data.get("results", [])
+        
+        # If we have a specific genre
+        elif genre:
+            # Get movies in this genre
+            req_path = f"/search/basic?country=us&service={selected_service}&type=movie&page=1&language=en&genre={genre}&sort_by=popularity"
+            conn.request("GET", req_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read().decode('utf-8')
+            content_data = json.loads(data)
+            movies = content_data.get("results", [])
+            
+            # Get shows in this genre
+            req_path = f"/search/basic?country=us&service={selected_service}&type=series&page=1&language=en&genre={genre}&sort_by=popularity"
+            conn.request("GET", req_path, headers=headers)
+            res = conn.getresponse()
+            data = res.read().decode('utf-8')
+            content_data = json.loads(data)
+            shows = content_data.get("results", [])
+            
+            # Combine movies and shows for this genre
+            results = movies + shows
+        
+        # Transform the results to our format
+        transformed_results = transform_content_items(results)
+        
+        return jsonify(transformed_results)
+        
+    except Exception as e:
+        print(f"Error getting category content: {str(e)}")
+        return jsonify({"error": f"Failed to get category content: {str(e)}"}), 500
 
 # Add content to watchlist
 @app.route("/api/watchlist", methods=["POST"])
@@ -839,6 +1004,156 @@ def get_current_user():
         return jsonify({"user": user_data}), 200
     except Exception as e:
         return jsonify({"error": f"Failed to get user data: {str(e)}"}), 500
+
+# Add new endpoints for discovery preferences
+@app.route("/api/discover/next", methods=["GET"])
+@jwt_required()
+def get_next_content():
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    
+    # Get user's seen content
+    seen_content = set(item["content_id"] for item in db.content_preferences.find(
+        {"user_id": user_id},
+        {"content_id": 1}
+    ))
+    
+    try:
+        # Import the StreamingService class
+        try:
+            from backend.utils.streaming_services import StreamingService
+        except ImportError:
+            try:
+                from utils.streaming_services import StreamingService
+            except ImportError:
+                from streaming_services import StreamingService
+        
+        # Get user's streaming services if available
+        user_services = user.get("streaming_services", []) if user else []
+        
+        # Use our optimized method to get content fast with fallback handling
+        content_item = StreamingService.get_discover_content(user_services)
+        
+        # Check if this content was already seen
+        if content_item and content_item.get("id") in seen_content:
+            # Try to get another item that hasn't been seen
+            for _ in range(5):  # Try up to 5 times
+                new_item = StreamingService.get_discover_content(user_services)
+                if new_item and new_item.get("id") not in seen_content:
+                    content_item = new_item
+                    break
+        
+        if content_item:
+            return jsonify(content_item)
+        else:
+            return jsonify({"error": "No content available"}), 404
+            
+    except Exception as e:
+        print(f"Error in discover/next: {str(e)}")
+        
+        # Try to get any content from the db as a fallback
+        try:
+            fallback_content = db.content_cache.find_one(
+                {"id": {"$exists": True, "$ne": "last_update"}},
+                {"_id": 0}
+            )
+            
+            if fallback_content:
+                return jsonify(fallback_content)
+        except Exception:
+            pass
+            
+        return jsonify({"error": "Failed to get next content. Please try again."}), 500
+
+@app.route("/api/discover/preference", methods=["POST"])
+@jwt_required()
+def record_preference():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    
+    if not data or "content_id" not in data or "preference" not in data:
+        return jsonify({"error": "Missing required fields"}), 400
+    
+    try:
+        preference = {
+            "user_id": user_id,
+            "content_id": data["content_id"],
+            "preference": data["preference"],  # "like" or "dislike"
+            "timestamp": pd.Timestamp.now()
+        }
+        
+        # Store preference
+        db.content_preferences.update_one(
+            {"user_id": user_id, "content_id": data["content_id"]},
+            {"$set": preference},
+            upsert=True
+        )
+        
+        return jsonify({"message": "Preference recorded successfully"}), 201
+        
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+# Add fallback API endpoint for streaming content
+@app.route("/api/fallback/streaming", methods=["GET"])
+@jwt_required()
+def get_fallback_streaming_content():
+    user_id = get_jwt_identity()
+    user = db.users.find_one({"_id": ObjectId(user_id)})
+    
+    if not user:
+        return jsonify({"error": "User not found"}), 404
+    
+    try:
+        # Get some popular genres to search for
+        genres = ["action", "comedy", "drama", "thriller", "sci-fi", "romance"]
+        selected_genre = random.choice(genres)
+        
+        conn = create_api_connection()  # Use helper function
+        
+        headers = {
+            'x-rapidapi-key': RAPIDAPI_KEY,
+            'x-rapidapi-host': RAPIDAPI_HOST
+        }
+        
+        # Get user streaming services to filter content
+        user_services = user.get("streaming_services", [])
+        
+        # Map our service IDs to RapidAPI service names
+        available_services = []
+        for service_id in user_services:
+            if service_id in SERVICE_MAPPING:
+                available_services.append(SERVICE_MAPPING[service_id])
+        
+        # Default to netflix if no mapping found
+        if not available_services:
+            available_services = ["netflix"]
+        
+        # Get a random service from user's available services
+        selected_service = random.choice(available_services)
+        
+        # Format the URL for the API request
+        req_path = f"/search/basic?country=us&service={selected_service}&type=movie&genre={selected_genre}&page=1&language=en"
+        
+        conn.request("GET", req_path, headers=headers)
+        
+        res = conn.getresponse()
+        data = res.read().decode("utf-8")
+        
+        # Parse the JSON response
+        result = json.loads(data)
+        
+        # Check if we got results
+        if "results" in result and len(result["results"]) > 0:
+            # Return a random movie from the results
+            random_index = random.randint(0, min(9, len(result["results"])-1))
+            return jsonify(result["results"][random_index])
+        else:
+            return jsonify({"error": "No content found from fallback API"}), 404
+            
+    except Exception as e:
+        print(f"Fallback API error: {str(e)}")
+        return jsonify({"error": f"Fallback API error: {str(e)}"}), 500
 
 # Error handler for expired JWT tokens
 @jwt.expired_token_loader

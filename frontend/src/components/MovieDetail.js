@@ -14,31 +14,32 @@ function MovieDetail() {
   useEffect(() => {
     const fetchContentDetails = async () => {
       try {
+        setLoading(true);
         const response = await ApiService.getContentDetails(id);
-        console.log('Content details response:', response.data);
-        setContent(response.data);
-        
-        // Check if user has already rated this content
-        try {
-          const ratingResponse = await ApiService.getRating(id);
-          if (ratingResponse.data) {
-            setUserRating(ratingResponse.data.rating);
-            setReview(ratingResponse.data.review || '');
-          }
-        } catch (error) {
-          // User hasn't rated this content yet, which is fine
-          console.log('No existing rating found');
+        console.log('Content details response:', response);
+
+        if (response.error) {
+          setError(response.error);
+          return;
         }
-        
-        setLoading(false);
+
+        if (response.data) {
+          console.log('Setting content:', response.data);
+          setContent(response.data);
+        } else {
+          setError('No content data received');
+        }
       } catch (error) {
         console.error('Error fetching content details:', error);
         setError('Failed to load content details. Please try again later.');
+      } finally {
         setLoading(false);
       }
     };
 
-    fetchContentDetails();
+    if (id) {
+      fetchContentDetails();
+    }
   }, [id]);
 
   const handleRatingSubmit = async (e) => {
@@ -78,14 +79,14 @@ function MovieDetail() {
     return <div className="container">Content not found</div>;
   }
 
-  // WatchMode API property mappings
-  const posterUrl = content.poster_url || content.poster || 'https://via.placeholder.com/300x450?text=No+Image';
-  const title = content.title || content.name;
+  // RapidAPI property mappings
+  const posterUrl = content.poster_url || 'https://via.placeholder.com/300x450?text=No+Image';
+  const title = content.title || '';
   const year = content.year || '';
-  const runtime = content.runtime_minutes || content.runtime || 'N/A';
+  const runtime = content.runtime_minutes || 'N/A';
   const genres = (content.genre_names || []).join(', ') || 'N/A';
-  const rating = content.us_rating || content.rating || 'N/A';
-  const plot = content.plot_overview || content.plot || 'No plot description available';
+  const rating = content.us_rating || 'N/A';
+  const plot = content.plot_overview || 'No plot description available';
   const directors = (content.directors || []).join(', ') || 'Not available';
   const cast = (content.cast || []).slice(0, 5).join(', ') || 'Not available';
 
@@ -170,21 +171,7 @@ function MovieDetail() {
           </form>
         </div>
         
-        <div className="similar-content">
-          <h3>Similar Titles</h3>
-          <div className="content-row">
-            {content.similar_titles?.slice(0, 5).map(similar => (
-              <div key={similar.id} className="content-card-small">
-                <img 
-                  src={similar.poster_url || similar.poster || 'https://via.placeholder.com/100x150?text=No+Image'} 
-                  alt={similar.title}
-                />
-                <h4>{similar.title}</h4>
-                <a href={`/movie/${similar.id}`} className="btn btn-small btn-outline">View</a>
-              </div>
-            ))}
-          </div>
-        </div>
+        {/* Remove Similar Titles section since it may not be available in the new API */}
       </div>
     </div>
   );

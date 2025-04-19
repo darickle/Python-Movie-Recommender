@@ -9,7 +9,8 @@ MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/media_recomme
 MONGO_DB_NAME = os.environ.get('MONGO_DB_NAME', 'media_recommender')
 
 # API configuration
-WATCHMODE_API_KEY = os.environ.get('WATCHMODE_API_KEY', 'default-watchmode-api-key')
+RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', '250f7c809bmshbd07ebdd782a896p1cf5e6jsn9767ca4b28cf')
+RAPIDAPI_HOST = os.environ.get('RAPIDAPI_HOST', 'streaming-availability.p.rapidapi.com')
 
 # Recommendation system configuration
 CONTENT_RECOMMENDER_WEIGHT = float(os.environ.get('CONTENT_RECOMMENDER_WEIGHT', 0.5))

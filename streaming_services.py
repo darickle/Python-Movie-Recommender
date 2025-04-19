@@ -1,21 +1,52 @@
-import requests
+import http.client
+import json
+import ssl  # Import ssl module
 from pymongo import MongoClient
 import certifi
 from datetime import datetime, timedelta
 import os
 from dotenv import load_dotenv
+import random
 
 # Load environment variables
 load_dotenv()
+
+# Create a custom SSL context that doesn't verify certificates
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
 
 # MongoDB setup
 MONGO_URI = os.getenv('MONGO_URI')
 client = MongoClient(MONGO_URI, tlsCAFile=certifi.where())
 db = client.get_database()
 
-# WatchMode API configuration
-WATCHMODE_API_KEY = os.getenv('WATCHMODE_API_KEY')
-WATCHMODE_BASE_URL = "https://api.watchmode.com/v1"
+# RapidAPI configuration
+RAPIDAPI_KEY = os.getenv('RAPIDAPI_KEY', "250f7c809bmshbd07ebdd782a896p1cf5e6jsn9767ca4b28cf")
+RAPIDAPI_HOST = "streaming-availability.p.rapidapi.com"
+
+# Service ID mapping between our system and RapidAPI
+SERVICE_MAPPING = {
+    "203": "netflix",  # Netflix
+    "26": "prime",    # Amazon Prime
+    "372": "disney",   # Disney+
+    "157": "hulu",     # Hulu
+    "387": "hbo",      # HBO Max
+    "444": "paramount", # Paramount+
+    "389": "peacock",   # Peacock
+    "371": "apple",     # Apple TV+
+    "442": "discovery",  # Discovery+
+    "443": "espn"       # ESPN+
+}
+
+REVERSE_SERVICE_MAPPING = {v: k for k, v in SERVICE_MAPPING.items()}
+
+# Helper function to create an HTTP connection with SSL context
+def create_api_connection():
+    return http.client.HTTPSConnection(
+        RAPIDAPI_HOST,
+        context=ssl_context  # Use our custom SSL context
+    )
 
 class StreamingService:
     @staticmethod
@@ -36,64 +67,113 @@ class StreamingService:
                 
             print(f"Refreshing content for services: {service_ids}")
             
-            # Fetch content from WatchMode API
-            params = {
-                "apiKey": WATCHMODE_API_KEY,
-                "regions": "US",  # Assuming US region
-                "source_ids": ",".join(service_ids),
-                "limit": 250  # Adjust based on needs
+            # Map our service IDs to RapidAPI service names
+            streaming_services = []
+            for service_id in service_ids:
+                if service_id in SERVICE_MAPPING:
+                    streaming_services.append(SERVICE_MAPPING[service_id])
+            
+            if not streaming_services:
+                print("No valid streaming services to query")
+                return False
+            
+            # Create connection to RapidAPI
+            conn = create_api_connection()  # Use helper function
+            headers = {
+                'x-rapidapi-key': RAPIDAPI_KEY,
+                'x-rapidapi-host': RAPIDAPI_HOST
             }
             
-            # Fetch movies
-            movies_url = f"{WATCHMODE_BASE_URL}/list-titles/"
-            params["types"] = "movie"
-            movies_response = requests.get(movies_url, params=params)
+            # We'll fetch both movies and shows
+            # RapidAPI has different endpoints for movies and shows
+            movie_results = []
+            show_results = []
             
-            # Fetch TV shows
-            shows_url = f"{WATCHMODE_BASE_URL}/list-titles/"
-            params["types"] = "show"
-            shows_response = requests.get(shows_url, params=params)
+            # Fetch popular movies
+            for service in streaming_services:
+                req_path = f"/search/basic?country=us&service={service}&type=movie&page=1&language=en&sort_by=popularity"
+                conn.request("GET", req_path, headers=headers)
+                res = conn.getresponse()
+                data = res.read().decode('utf-8')
+                
+                try:
+                    content_data = json.loads(data)
+                    if "results" in content_data:
+                        movie_results.extend(content_data["results"])
+                except Exception as e:
+                    print(f"Error parsing movie results for {service}: {str(e)}")
             
-            if movies_response.status_code == 200 and shows_response.status_code == 200:
-                # Clear existing cache for these services
-                db.content_cache.delete_many({"service_id": {"$in": service_ids}})
+            # Fetch popular TV shows
+            for service in streaming_services:
+                req_path = f"/search/basic?country=us&service={service}&type=series&page=1&language=en&sort_by=popularity"
+                conn.request("GET", req_path, headers=headers)
+                res = conn.getresponse()
+                data = res.read().decode('utf-8')
                 
-                # Process and store movies
-                movies_data = movies_response.json().get("titles", [])
-                for movie in movies_data:
-                    movie["content_type"] = "movie"
-                    movie["service_ids"] = service_ids
-                    movie["cached_at"] = current_time
-                    db.content_cache.update_one(
-                        {"id": movie["id"]},
-                        {"$set": movie},
-                        upsert=True
-                    )
+                try:
+                    content_data = json.loads(data)
+                    if "results" in content_data:
+                        show_results.extend(content_data["results"])
+                except Exception as e:
+                    print(f"Error parsing show results for {service}: {str(e)}")
+            
+            # Process and store movies
+            for movie in movie_results:
+                movie_id = movie.get("imdbId")
+                if not movie_id:
+                    continue
+                    
+                # Map RapidAPI structure to our structure
+                formatted_movie = {
+                    "id": movie_id,
+                    "title": movie.get("title", ""),
+                    "year": movie.get("year", ""),
+                    "content_type": "movie",
+                    "service_ids": [REVERSE_SERVICE_MAPPING.get(s, s) for s in movie.get("streamingInfo", {}).get("us", {})],
+                    "poster_url": movie.get("posterURLs", {}).get("original") or movie.get("posterURLs", {}).get("500"),
+                    "plot_overview": movie.get("overview", ""),
+                    "cached_at": current_time
+                }
                 
-                # Process and store TV shows
-                shows_data = shows_response.json().get("titles", [])
-                for show in shows_data:
-                    show["content_type"] = "show"
-                    show["service_ids"] = service_ids
-                    show["cached_at"] = current_time
-                    db.content_cache.update_one(
-                        {"id": show["id"]},
-                        {"$set": show},
-                        upsert=True
-                    )
-                
-                # Update last refresh timestamp
                 db.content_cache.update_one(
-                    {"type": "last_update"},
-                    {"$set": {"timestamp": current_time}},
+                    {"id": movie_id},
+                    {"$set": formatted_movie},
                     upsert=True
                 )
+            
+            # Process and store TV shows
+            for show in show_results:
+                show_id = show.get("imdbId")
+                if not show_id:
+                    continue
+                    
+                # Map RapidAPI structure to our structure
+                formatted_show = {
+                    "id": show_id,
+                    "title": show.get("title", ""),
+                    "year": show.get("year", ""),
+                    "content_type": "show",
+                    "service_ids": [REVERSE_SERVICE_MAPPING.get(s, s) for s in show.get("streamingInfo", {}).get("us", {})],
+                    "poster_url": show.get("posterURLs", {}).get("original") or show.get("posterURLs", {}).get("500"),
+                    "plot_overview": show.get("overview", ""),
+                    "cached_at": current_time
+                }
                 
-                print(f"Successfully cached {len(movies_data)} movies and {len(shows_data)} shows")
-                return True
-            else:
-                print(f"API Error - Movies: {movies_response.status_code}, Shows: {shows_response.status_code}")
-                return False
+                db.content_cache.update_one(
+                    {"id": show_id},
+                    {"$set": formatted_show},
+                    upsert=True
+                )
+            
+            # Update last refresh timestamp
+            db.content_cache.update_one(
+                {"type": "last_update"},
+                {"$set": {"timestamp": current_time}},
+                upsert=True
+            )
+            
+            print(f"Successfully cached {len(movie_results)} movies and {len(show_results)} shows")
+            return True
                 
         except Exception as e:
             print(f"Error refreshing content: {str(e)}")
@@ -136,20 +216,68 @@ class StreamingService:
                     return cached_content
                 
                 # If not, fetch details from API
-                url = f"{WATCHMODE_BASE_URL}/title/{content_id}/details/"
-                params = {"apiKey": WATCHMODE_API_KEY}
+                conn = create_api_connection()  # Use helper function
                 
-                response = requests.get(url, params=params)
+                headers = {
+                    'x-rapidapi-key': RAPIDAPI_KEY,
+                    'x-rapidapi-host': RAPIDAPI_HOST
+                }
                 
-                if response.status_code == 200:
-                    details = response.json()
+                # Determine content type (movie or series)
+                content_type = "movie" if cached_content.get("content_type") == "movie" else "series"
+                
+                # Make API request
+                req_path = f"/get/{content_type}/id/{content_id}?country=us"
+                conn.request("GET", req_path, headers=headers)
+                
+                res = conn.getresponse()
+                data = res.read().decode('utf-8')
+                
+                try:
+                    details = json.loads(data)
+                    
+                    # Transform the response to match our expected format
+                    transformed_details = {
+                        "id": content_id,
+                        "title": details.get("title", cached_content.get("title", "")),
+                        "year": details.get("year", cached_content.get("year", "")),
+                        "runtime_minutes": details.get("runtime", 0),
+                        "us_rating": details.get("rating", "Not Rated"),
+                        "poster_url": (details.get("posterURLs", {}).get("original") or 
+                                      details.get("posterURLs", {}).get("500") or 
+                                      cached_content.get("poster_url", "")),
+                        "plot_overview": details.get("overview", cached_content.get("plot_overview", "")),
+                        "genre_names": [genre.get("name", "") for genre in details.get("genres", [])],
+                        "cast": [cast.get("name", "") for cast in details.get("cast", [])],
+                        "directors": [director.get("name", "") for director in details.get("directors", [])],
+                        "sources": [],
+                        "details_cached": True,
+                        "content_type": cached_content.get("content_type", content_type)
+                    }
+                    
+                    # Process streaming info
+                    streaming_info = details.get("streamingInfo", {}).get("us", {})
+                    for provider, info in streaming_info.items():
+                        source_id = REVERSE_SERVICE_MAPPING.get(provider, "")
+                        if source_id:
+                            for stream_option in info:
+                                transformed_details["sources"].append({
+                                    "source_id": source_id,
+                                    "name": provider,
+                                    "type": stream_option.get("type", ""),
+                                    "web_url": stream_option.get("link", "")
+                                })
+                    
                     # Update cache with details
-                    details["details_cached"] = True
                     db.content_cache.update_one(
                         {"id": content_id},
-                        {"$set": details}
+                        {"$set": transformed_details},
+                        upsert=True
                     )
-                    return details
+                    
+                    return transformed_details
+                except Exception as e:
+                    print(f"Error parsing content details: {str(e)}")
             
             return None
             
