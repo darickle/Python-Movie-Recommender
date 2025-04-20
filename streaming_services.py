@@ -43,10 +43,13 @@ REVERSE_SERVICE_MAPPING = {v: k for k, v in SERVICE_MAPPING.items()}
 
 # Helper function to create an HTTP connection with SSL context
 def create_api_connection():
-    return http.client.HTTPSConnection(
-        RAPIDAPI_HOST,
-        context=ssl_context  # Use our custom SSL context
-    )
+    return {
+        'headers': {
+            'X-RapidAPI-Key': '995e2c999cmsh5914690d2b1359ep10b499jsn0f6ec0e74ced',
+            'X-RapidAPI-Host': 'streaming-availability.p.rapidapi.com',
+            'Content-Type': 'application/json'
+        }
+    }
 
 class StreamingService:
     @staticmethod

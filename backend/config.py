@@ -9,7 +9,7 @@ MONGO_URI = os.environ.get('MONGO_URI', 'mongodb://localhost:27017/media_recomme
 MONGO_DB_NAME = os.environ.get('MONGO_DB_NAME', 'media_recommender')
 
 # API configuration
-RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', '250f7c809bmshbd07ebdd782a896p1cf5e6jsn9767ca4b28cf')
+RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', '995e2c999cmsh5914690d2b1359ep10b499jsn0f6ec0e74ced')
 RAPIDAPI_HOST = os.environ.get('RAPIDAPI_HOST', 'streaming-availability.p.rapidapi.com')
 
 # Recommendation system configuration
