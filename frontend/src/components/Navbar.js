@@ -32,6 +32,7 @@ function Navbar({ isAuthenticated, logout, user }) {
         {isAuthenticated ? (
           <>
             <Link to="/" className={`nav-item ${isActive('/')}`} onClick={closeMenu}>Home</Link>
+            <Link to="/discover" className={`nav-item ${isActive('/discover')}`} onClick={closeMenu}>Discover</Link>
             <Link to="/watchlist" className={`nav-item ${isActive('/watchlist')}`} onClick={closeMenu}>Watchlist</Link>
             <Link to="/profile" className={`nav-item ${isActive('/profile')}`} onClick={closeMenu}>Profile</Link>
             <button onClick={() => { logout(); closeMenu(); }} className="nav-item btn-link">Logout</button>
