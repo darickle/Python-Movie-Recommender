@@ -146,9 +146,6 @@ function Discover() {
 
   return (
     <div className="discover-container">
-      <div className="swipe-hint">
-        Swipe right to like, left to dislike, or use the buttons below
-      </div>
       
       <div className="card-container">
         <div className={`content-card ${animationClass}`}>
