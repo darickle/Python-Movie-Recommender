@@ -1,3 +1,14 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This file contains the Watchlist component which fetches 
+ * and displays the user's watchlist. 
+ * It allows users to remove items from the watchlist.
+ * The component uses React hooks for state management and
+ * side effects, and Axios for making HTTP requests.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import axios from 'axios';

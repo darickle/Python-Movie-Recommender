@@ -1,3 +1,10 @@
+"""
+Darick Le
+March 11 2025
+This module handles the interaction with the RapidAPI service for streaming content.
+It includes functions to refresh content, get discover content, and retrieve content details.
+"""
+
 import http.client
 import json
 import ssl  # Import ssl module for certificate handling

@@ -1,3 +1,12 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This service handles authentication, streaming services, content search,
+ * recommendations, watchlist, ratings, and user preferences.
+ * It also includes error handling, retry logic, and timeout management.
+ */
+
 import axios from 'axios';
 
 const API_URL = 'http://localhost:5000/api';

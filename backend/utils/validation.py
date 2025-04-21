@@ -1,3 +1,9 @@
+"""
+Darick Le
+March 11 2025
+Validation functions for user registration, login, and movie ID.
+"""
+
 from flask import jsonify
 
 def validate_registration_input(data):

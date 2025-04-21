@@ -1,3 +1,14 @@
+"""
+Darick Le
+March 11 2025
+Data Processing Module
+This module contains functions to preprocess movie data, extract features,
+normalize features, and create user feature vectors for the movie recommendation system.
+It includes functions to handle missing values, encode categories,
+normalize numerical features, and calculate similarity scores between user preferences
+and movie features.
+"""
+
 import pandas as pd
 import numpy as np
 import json

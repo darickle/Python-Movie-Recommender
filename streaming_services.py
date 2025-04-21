@@ -1,3 +1,11 @@
+"""
+Darick Le
+March 22 2025
+Streaming Services API Integration
+This module integrates with the RapidAPI Streaming Availability API to fetch 
+and cache content availability data for various streaming services.
+"""
+
 import http.client
 import json
 import ssl  # Import ssl module

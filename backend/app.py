@@ -1,3 +1,11 @@
+"""
+Darick Le
+March 11 2025
+This program is a Flask API that connects to a MongoDB database and provides endpoints for user registration
+, login, and content recommendations. It includes methods to handle user preferences, streaming services,
+and content search using RapidAPI. The API also implements JWT authentication for secure access to user data.
+"""
+
 from flask import Flask, request, jsonify
 import http.client
 import json

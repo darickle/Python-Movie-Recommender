@@ -1,3 +1,12 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * This page is the main discovery page for the user.
+ * It fetches the next content to be displayed based on the user's preferences and streaming services.
+ * The user can like or dislike the content, and the app will fetch the next content accordingly.
+ * The page also handles loading states, error handling, and retry logic.
+ */
+
 import React, { useState, useEffect, useCallback } from 'react';
 import ApiService from './ApiService';
 import '../styles/Discover.css';

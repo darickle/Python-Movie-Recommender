@@ -1,3 +1,11 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * Home component for displaying personalized recommendations and trending content
+ * This component fetches data from the API and displays it in a user-friendly format.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import ApiService from './ApiService';

@@ -1,3 +1,15 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This component allows users to select their streaming services 
+ * during the initial setup or update their preferences later.
+ * It fetches the available streaming services from the backend,
+ * displays them in a grid, and allows users to select or deselect
+ * their preferred services. Upon submission, it updates the user's
+ * preferences in the backend and navigates to the home page.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';

@@ -1,3 +1,14 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This is the signup page for the application
+ * It allows users to create an account by providing their email and password
+ * It also includes form validation and error handling
+ * The form includes fields for email, password, and confirm password
+ * The password must be at least 8 characters long
+ */
+
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';

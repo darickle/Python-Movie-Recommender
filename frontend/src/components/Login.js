@@ -1,3 +1,12 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * Login component for user authentication
+ * This component handles user login, including form submission, error handling, and loading state.
+ * It uses the ApiService to send login requests and manage user sessions.
+ */
+
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import ApiService from './ApiService';

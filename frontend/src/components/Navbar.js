@@ -1,3 +1,13 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This component handles the navigation bar, including links to different pages
+ * and user authentication status.
+ * It uses React Router for navigation and manages the menu state for mobile view.
+ * The component receives props for authentication status, logout function, and user information.
+ */
+
 import React, { useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
 import '../styles/navbar.css';

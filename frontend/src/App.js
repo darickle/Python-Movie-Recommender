@@ -1,3 +1,14 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This file contains the main application logic, including routing and authentication.
+ * It uses React Router for navigation and axios for API requests.
+ * The application includes components for login, registration, streaming setup, home page,
+ * movie detail, watchlist, profile, and discover.
+ * The application also handles API connection errors and token expiration.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { BrowserRouter as Router, Route, Routes, Navigate, useLocation } from 'react-router-dom';
 import axios from 'axios';

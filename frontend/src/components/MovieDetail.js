@@ -1,3 +1,13 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * This file contains the MovieDetail component which fetches and displays 
+ * detailed information about a movie or TV show. 
+ * It includes features such as user ratings, reviews, and watchlist management.
+ * The component uses React hooks for state management and side effects.
+ */
+
 import React, { useState, useEffect } from 'react';
 import { useParams } from 'react-router-dom';
 import ApiService from './ApiService';

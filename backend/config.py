@@ -1,3 +1,10 @@
+"""
+Darick Le
+March 11 2025
+This module contains the configuration settings for the media recommender system.
+It loads environment variables from a .env file and sets default values for various configurations.
+"""
+
 import os
 from dotenv import load_dotenv
 

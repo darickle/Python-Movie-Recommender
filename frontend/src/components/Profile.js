@@ -1,3 +1,13 @@
+/* 
+ * Darick Le
+ * March 22 2025
+ * Api service for managing API requests
+ * Shows the user's profile information
+ * Allows the user to update their profile information
+ * Allows the user to select their preferred genres
+ * Allows the user to manage their streaming services
+ */
+
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import ApiService from './ApiService';
